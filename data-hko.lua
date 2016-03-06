@@ -1,14 +1,14 @@
 require 'image'
 local data_verbose = false
 
-function getdataSeq_mnist(datafile)
+function getdataSeq_mnist()
    -- local data = torch.DiskFile(datafile,'r'):readObject()
    local data_path = "/Users/zengxiaohui/project/ConvLSTM/helper/data/"
    -- data size (totalInstances or nsamples=2000?, sequence_length=20, 1, 64, 64)
-   -- local fileList = 
    local datasetSeq ={}
    -- data = data:float()/255.0 -- to range(0, 1)
 
+   --------------- configuration: -----------------
 --   local std = std or 0.2
    local nsamples = 2037 -- data:size(1)
    local nseq  = 20 -- data:size(2)
@@ -16,6 +16,16 @@ function getdataSeq_mnist(datafile)
    local ncols = nrows -- data:size(5)
    local nbatch = 8
    print (nsamples .. ' ' .. nseq .. ' ' .. nrows .. ' ' .. ncols)
+
+   ------------- read the powerful txt file! ------
+   local fileList = {}
+   f = io.open('testseq.txt', 'r')
+   local id = 1
+   for line in f:lines() do
+      fileList[id] = line
+      id = id + 1
+   end
+   assert(table.getn(fileList) == nseq * nsamples)
 
    function datasetSeq:size()
       return nsamples
@@ -36,14 +46,13 @@ function getdataSeq_mnist(datafile)
             -- image index
             -- read the 20 frames starting from i
             for k = 1, nseq do
-               -- input_batch[batch_ind][k] = image.load(fileList[(i-1)*nseq + k])
-               local loa = image.load(data_path..'img'..tostring((i-1)*5 + k)..'.png')
+               input_batch[batch_ind][k] = image.load(data_path..fileList[(i-1)*nseq + k])
+               -- local loa = image.load(data_path..'img'..tostring((i-1)*5 + k)..'.png')
                -- print(loa:size())
                -- print(input_batch[batch_ind][k]:size())
                --assert(loa:size() == input_batch[batch_ind][k]:size(), 
                --   "is"..tostring(loa:size())..tostring(input_batch[batch_ind][k]:size()))
-
-               input_batch[batch_ind][k] = loa
+               --input_batch[batch_ind][k] = loa
 
             end
          end
