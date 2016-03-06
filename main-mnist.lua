@@ -64,8 +64,8 @@ local function main()
       model:zeroGradParameters()
 
       inputTable = {}
-      target  = torch.Tensor()--= torch.Tensor(opt.transf,opt.memorySizeH, opt.memorySizeW) 
-      sample = datasetSeq[t]
+      target  = torch.Tensor()-- = torch.Tensor(opt.transf,opt.memorySizeH, opt.memorySizeW) 
+      sample = datasetSeq[t] -- 
       data = sample[1]
       for i = 1,data:size(1)-1 do
         table.insert(inputTable, data[i]:cuda())
@@ -80,11 +80,12 @@ local function main()
       gradoutput = gradloss:updateOutput(output)
 
       f = f + criterion:updateOutput(gradoutput,gradtarget)
-
+      print("f is ", f)
       -- gradients
-      local gradErrOutput = criterion:updateGradInput(gradoutput,gradtarget)
-      local gradErrGrad = gradloss:updateGradInput(output,gradErrOutput)
-           
+      -- local gradErrOutput = criterion:updateGradInput(gradoutput,gradtarget)
+      -- local gradErrGrad = gradloss:updateGradInput(output,gradErrOutput)
+      local gradErrGrad = criterion:updateGradInput(output, target)
+
       model:updateGradInput(inputTable,gradErrGrad)
 
       model:accGradParameters(inputTable, gradErrGrad)  
@@ -94,12 +95,12 @@ local function main()
     end
    
    
-    if math.fmod(t,20000) == 0 then
+    if math.fmod(t, 1018) == 0 then -- 8147/8
       epoch = epoch + 1
-      eta = opt.eta*math.pow(0.5,epoch/50)    
+    --  eta = opt.eta*math.pow(0.5,epoch/50)  -- reduce learning rate  
     end  
 
-    rmspropconf = {learningRate = eta,
+    rmspropconf = {learningRate = opt.eta,
                   epsilon = 1e-5,
                   alpha = 0.9}
 
@@ -109,7 +110,7 @@ local function main()
     model:forget()
     --------------------------------------------------------------------
     -- compute statistics / report error
-    if math.fmod(t , opt.nSeq) == 1 then
+    if math.fmod(t , opt.nSeq) == 1 then -- 19
       print('==> iteration = ' .. t .. ', average loss = ' .. err/(opt.nSeq) .. ' lr '..eta ) -- err/opt.statInterval)
       err = 0
       if opt.save and math.fmod(t , opt.nSeq*1000) == 1 and t>1 then

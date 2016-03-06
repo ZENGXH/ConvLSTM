@@ -19,7 +19,7 @@ function getdataSeq_mnist()
 
    ------------- read the powerful txt file! ------
    local fileList = {}
-   f = io.open('testseq.txt', 'r')
+   f = io.open('../helper/testseq.txt', 'r')
    local id = 1
    for line in f:lines() do
       fileList[id] = line
