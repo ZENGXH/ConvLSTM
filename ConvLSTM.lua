@@ -14,13 +14,15 @@ require 'extracunn'
 
 local ConvLSTM, parent = torch.class('nn.ConvLSTM', 'nn.LSTM')
 
-function ConvLSTM:__init(inputSize, outputSize, rho, kc, km, stride, batchSize)
+function ConvLSTM:__init(inputSize, outputSize, rho, kc, km, stride, batchSize, cell2gate, ka)
    self.kc = kc
    self.km = km
    self.padc = torch.floor(kc/2)
    self.padm = torch.floor(km/2)
    self.stride = stride or 1
    self.batchSize = batchSize or nil
+   self.cell2gate = cell2gate or false
+   self.ka = ka or 0
    parent.__init(self, inputSize, outputSize, rho or 10)
 end
 
@@ -31,8 +33,15 @@ function ConvLSTM:buildGate()
    gate:add(nn.NarrowTable(1,2)) -- we don't need cell here
    local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
    local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
+   if(self.cell2gate) then
+       local cell2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
+   end
    local para = nn.ParallelTable()
-   para:add(input2gate):add(output2gate) 
+   if(self.cell2gate) then
+       para:add(input2gate):add(output2gate):add(cell2gate)
+   else
+       para:add(input2gate):add(output2gate) 
+   end
    gate:add(para)
    gate:add(nn.CAddTable())
    gate:add(nn.Sigmoid())
