@@ -11,9 +11,13 @@ opt.etaDecay  = 1e-5 -- learning rate decay
 opt.momentum  = 0.9  -- gradient momentum
 opt.maxIter   = 1000000 --max number of updates
 opt.nSeq      = 20
+
+opt.input_nSeq = 5
+opt.output_nSeq = 15
+
 opt.transf    = 2       -- number of parameters for transformation; 6 for affine or 3 for 2D transformation
 opt.nFilters  = {1} --9,45} -- number of filters in the encoding/decoding layers
-opt.nFiltersMemory   = {32,45} --{45,60}
+opt.nFiltersMemory   = {4, 64} --{45,60}
 opt.kernelSize       = 3 -- size of kernels in encoder/decoder layers
 opt.kernelSizeMemory = 7
 opt.kernelSizeFlow   = 15

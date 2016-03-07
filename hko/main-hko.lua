@@ -13,12 +13,111 @@ require 'ConvLSTM'
 require 'display_flow'
 
 --torch.setdefaulttensortype('torch.FloatTensor')
+-------- build model
 
+require 'nn'
+require 'rnn'
+require 'ConvLSTM'
+require 'DenseTransformer2D'
+require 'SmoothHuberPenalty'
+require 'encoder'
+require 'decoder'
+require 'flow'
+require 'stn'
+
+model = nn.Sequential()
+
+-- add encoder
+-- local seqe = nn.Sequencer(encoder)
+-- seqe:remember('both')
+-- seqe:training()
+-- model:add(seqe)
+
+-- memory branch
+local memory_branch = nn.Sequential()
+
+------------ middle0, input size 4 to 64 -----------
+local encoder_0 = nn.Sequencer(nn.ConvLSTM(opt.nFiltersMemory[1],opt.nFiltersMemory[2],  -- 5, 15?
+                  opt.input_nSeq, opt.kernelSize, 
+                  opt.kernelSizeMemory, opt.stride, 8 -- batchsize
+                  true, 3 )) -- with cell 2 gate, kernel size 3
+
+
+
+encoder_0:remember('both')
+encoder_0:training()
+
+------------ middle1, input size 64 to 64 -----------
+
+local encoder_1 = nn.Sequencer(nn.ConvLSTMNo(opt.nFiltersMemory[2],opt.nFiltersMemory[2],  -- 5, 15?
+                  opt.input_nSeq, opt.kernelSize, 
+                  opt.kernelSizeMemory, opt.stride, 8 -- batchsize
+                  true, 3 )) -- with cell 2 gate, kernel size 3
+
+encoder_1:remember('both')
+encoder_1:training()
+
+------------ middle2, input size 0 to 64 ------------
+------------ (no input, copy cell&hid from encoder_0) 
+
+local unit_decoder_2 = nn.ConvLSTMNoInput(opt.nFiltersMemory[2],opt.nFiltersMemory[2],  -- 5, 15?
+                  opt.nSeq, 0, -- 15, size of kernel for input = 0
+                  opt.kernelSizeMemory, opt.stride, 8 -- 3, 1, 8:batchsize
+                  true, 3 ) -- with cell 2 gate, kernel size 3
+-- local decoder_2 = 
+---- TODO: SET THE input of decoder 2 to be zeroTendor
+---- TODO: set the kernel size of the decoder LSEM kernel size which multiple input to be 0?
+
+decoder_2:remember('both')
+decoder_2:training()
+
+------------ middle3, input size 64 to 64 ------------
+------------ input is the output of decoder_2, copy cell&hid from encoder_1 
+local decoder_3 = nn.Sequencer(nn.ConvLSTM(opt.nFiltersMemory[2],opt.nFiltersMemory[2],  -- 5, 15?
+                  opt.output_nSeq, opt.kernelSize, 
+                  opt.kernelSizeMemory, opt.stride, 8 -- batchsize
+                  true, 3 )) -- with cell 2 gate, kernel size 3
+
+
+
+decoder_3:remember('both')
+decoder_3:training()
+
+-------------- middle4, input size 64 to 4 ------------
+
+local convForward_4 = nn.SpatialConvolution(opt.nFiltersMemory[2], opt.nFiltersMemory[1], 
+                      self.kc, self.kc, 
+                      self.stride, self.stride, 
+                      self.padc, self.padc)
+
+--------------------------------------------------------
+-- add connection between encoder_0 and decoder_2, encoder_1 and decoder_3
+-- refer to https://github.com/Element-Research/rnn/blob/master/examples/encoder-decoder-coupling.lua
+
+local function forwardConnect(encLSTM, decLSTM)
+   decLSTM.userPrevOutput = nn.rnn.recursiveCopy(decLSTM.userPrevOutput, encLSTM.outputs[opt.seqLen])
+   decLSTM.userPrevCell = nn.rnn.recursiveCopy(decLSTM.userPrevCell, encLSTM.cells[opt.seqLen])
+end
+
+local function backwardConnect(encLSTM, decLSTM)
+   encLSTM.userNextGradCell = nn.rnn.recursiveCopy(encLSTM.userNextGradCell, decLSTM.userGradPrevCell)
+   encLSTM.gradPrevOutput = nn.rnn.recursiveCopy(encLSTM.gradPrevOutput, decLSTM.userGradPrevOutput)
+end
+-----------------------------------------------------------
+
+
+
+-- TODO: ADD CRITERION
+
+-- TODO: SET model:cuda() AND criterion:cuda()
+
+
+--------- end of build model
 local function main()
   cutorch.setDevice(1)
   paths.dofile('opts-mnist.lua')
   paths.dofile('data-hko.lua')
-  paths.dofile('model.lua')
+  -- paths.dofile('model.lua')
   
   datasetSeq = getdataSeq_mnist(opt.dataFile) -- we sample nSeq consecutive frames
 
