@@ -14,16 +14,27 @@ require 'extracunn'
 
 local ConvLSTM, parent = torch.class('nn.ConvLSTM', 'nn.LSTM')
 
-function ConvLSTM:__init(inputSize, outputSize, rho, kc, km, stride, batchSize, cell2gate, ka)
-   self.kc = kc
-   self.km = km
-   self.padc = torch.floor(kc/2)
+--[[to be copy(64, 64, -- inputSize and outputSize
+              5,      -- length of seq
+              3, 3,   -- size of kernel for cell and memory
+              1, 8,   -- stride and batchsize
+              true, 3,-- with cell to gate, kernel size 3
+              false)  -- no input for LSTM
+]]--
+function ConvLSTM:__init(inputSize, outputSize, rho, kc, km, stride, batchSize, cell2gate, ka, inputFlag)
+   
+   self.kc = kc or 3
+   self.km = km or 3
+   self.padc = torch.floor(kc/2) 
    self.padm = torch.floor(km/2)
    self.stride = stride or 1
    self.batchSize = batchSize or nil
-   self.cell2gate = cell2gate or false
-   self.ka = ka or 0
-   parent.__init(self, inputSize, outputSize, rho or 10)
+   self.cell2gate = cell2gate or true
+   self.ka = ka or 3
+   -- for decoder1, ie layer 2: no input 
+   self.inputFlag = inputFlag or true
+
+   parent.__init(self, inputSize, outputSize, rho or 5)
 end
 
 -------------------------- factory methods -----------------------------
@@ -31,7 +42,12 @@ function ConvLSTM:buildGate()
    -- Note : Input is : {input(t), output(t-1), cell(t-1)}
    local gate = nn.Sequential()
    gate:add(nn.NarrowTable(1,2)) -- we don't need cell here
-   local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
+   if(self.inputFlag) then
+        local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
+    else
+        print(" setup LSTM with no input to inputs !! ")
+    end 
+
    local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
    if(self.cell2gate) then
        local cell2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
@@ -77,27 +93,42 @@ function ConvLSTM:buildcell()
    -- Input is : {input(t), output(t-1), cell(t-1)}
    self.inputGate = self:buildInputGate() 
    self.forgetGate = self:buildForgetGate()
-   self.cellGate = self:buildcellGate()
+   self.cellGate = self:buildcellGate() -- cellGate is actually cell state
+
+                                -- start --
    -- forget = forgetGate{input, output(t-1), cell(t-1)} * cell(t-1)
    local forget = nn.Sequential()
    local concat = nn.ConcatTable()
-   concat:add(self.forgetGate):add(nn.SelectTable(3))
-   forget:add(concat)
-   forget:add(nn.CMulTable())
+
+   if(inputFlag) then
+        concat:add(self.forgetGate):add(nn.SelectTable(3))
+   else
+        concat:add(self.forgetGate):add(nn.SelectTable(2))
+   end
+
+   forget:add(concat) -- {forgetGate},{selet cell activetion by selectable}
+   forget:add(nn.CMulTable()) -- output = forgetGate} * cellActivetion
+  --------------------------------
+
    -- input = inputGate{input(t), output(t-1), cell(t-1)} * cellGate{input(t), output(t-1), cell(t-1)}
    local input = nn.Sequential()
    local concat2 = nn.ConcatTable()
    concat2:add(self.inputGate):add(self.cellGate)
    input:add(concat2)
    input:add(nn.CMulTable())
+   ---------------------------------
+
+
    -- cell(t) = forget + input
    local cell = nn.Sequential()
    local concat3 = nn.ConcatTable()
    concat3:add(forget):add(input)
    cell:add(concat3)
    cell:add(nn.CAddTable())
-   self.cell = cell
+
+   self.cell = cell -- ct
    return cell
+
 end   
    
 function ConvLSTM:buildOutputGate()
@@ -113,25 +144,59 @@ function ConvLSTM:buildModel()
    self.cell = self:buildcell()
    self.outputGate = self:buildOutputGate()
    -- assemble
-   local concat = nn.ConcatTable()
-   concat:add(nn.NarrowTable(1,2)):add(self.cell)
    local model = nn.Sequential()
-   model:add(concat)
+
+   if(self.inputFlag) then
+       local concat = nn.ConcatTable()
+       concat:add(nn.NarrowTable(1,2)) -- select {input, output(t-1)} 
+             :add(self.cell)           -- cell gate {cell(t)}
+       model:add(concat)               -- {{input(t), output(t-1)}, cell(t)}, 
+   end
+
    -- output of concat is {{input(t), output(t-1)}, cell(t)}, 
    -- so flatten to {input(t), output(t-1), cell(t)}
-   model:add(nn.FlattenTable())
-   local cellAct = nn.Sequential()
-   cellAct:add(nn.SelectTable(3))
-   cellAct:add(nn.Tanh())
-   local concat3 = nn.ConcatTable()
-   concat3:add(self.outputGate):add(cellAct)
+
+   model:add(nn.FlattenTable())  -- as input to outputGate
+   --- ============ partB of the model
+   -------- output = 
+   local cellAct = nn.Sequential() -- choose cell gate
+   if(self.inputFlag) then
+      cellAct:add(nn.SelectTable(3)) -- {intput gate}{}{cell gate}
+   else
+       cellAct:add(nn.SelectTable(2)) -- special case: input is {output(t-1), cell(t)}
+   end
+   -- notice: previous cell activation cell(t-1) is self.cell
+   -- currenct cell stats if nn.cell:
+   cellAct:add(nn.Tanh()) -- tanh
+   local concat3 = nn.ConcatTable() -- concat outputgate and cell activation
+   concat3:add(self.outputGate):add(cellAct)  -- {{outputGate}{cellActivation}}
+
    local output = nn.Sequential()
-   output:add(concat3)
-   output:add(nn.CMulTable())
+   output:add(concat3) 
+   output:add(nn.CMulTable())                 -- {outputGate}*{cellActivation} = output
+   ---------------------------------------------
+
    -- we want the model to output : {output(t), cell(t)}
    local concat4 = nn.ConcatTable()
-   concat4:add(output):add(nn.SelectTable(3))
-   model:add(concat4)
+
+   if(self.inputFlag) then
+       concat4:add(output):add(nn.SelectTable(3))
+   else
+       concat4:add(output):add(nn.SelectTable(2))  -- special case: input is {output(t-1), cell(t)}
+   end    
+
+   model:add(concat4)  
+   --[[ 
+     after model add flattentable:
+
+                  {input(t), output(t-1), cell(t)} 
+concat&multi:       |:select(3)              |
+  {outputGate} * {cellAct}                   | :selectTable(3)
+              ||                             | :TanH()
+     {     {output}           ,          {callAct}}  }
+                             ||  
+   ]]-- 
+
    return model
 end
 

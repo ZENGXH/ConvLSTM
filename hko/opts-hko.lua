@@ -11,7 +11,7 @@ opt.etaDecay  = 1e-5 -- learning rate decay
 opt.momentum  = 0.9  -- gradient momentum
 opt.maxIter   = 1000000 --max number of updates
 opt.nSeq      = 20
-
+opt.batchSize = 8
 opt.input_nSeq = 5
 opt.output_nSeq = 15
 

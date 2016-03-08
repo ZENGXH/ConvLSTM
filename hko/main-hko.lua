@@ -60,35 +60,37 @@ encoder_1:training()
 ------------ middle2, input size 0 to 64 ------------
 ------------ (no input, copy cell&hid from encoder_0) 
 
-local unit_decoder_2 = nn.ConvLSTMNoInput(opt.nFiltersMemory[2],opt.nFiltersMemory[2],  -- 5, 15?
-                  opt.nSeq, 0, -- 15, size of kernel for input = 0
-                  opt.kernelSizeMemory, opt.stride, 8 -- 3, 1, 8:batchsize
-                  true, 3 ) -- with cell 2 gate, kernel size 3
--- local decoder_2 = 
+local decoder_2 = nn.ConvLSTMNoInput(opt.nFiltersMemory[2],opt.nFiltersMemory[2],  -- 64, 64 inputSize and outputSize
+                                      opt.output_nSeq,             -- length of seq
+                                      0, opt.kernelSizeMemory,     -- size of kernel for intput2gate and memory2gate
+                                      opt.stride, opt.batchSize,   -- stride and batchsize
+                                      true, 3,-- with previous cell to gate, kernel size 3
+                                      false)  -- no input for LSTM
+
 ---- TODO: SET THE input of decoder 2 to be zeroTendor
 ---- TODO: set the kernel size of the decoder LSEM kernel size which multiple input to be 0?
-
 decoder_2:remember('both')
 decoder_2:training()
 
 ------------ middle3, input size 64 to 64 ------------
 ------------ input is the output of decoder_2, copy cell&hid from encoder_1 
 local decoder_3 = nn.Sequencer(nn.ConvLSTM(opt.nFiltersMemory[2],opt.nFiltersMemory[2],  -- 5, 15?
-                  opt.output_nSeq, opt.kernelSize, 
-                  opt.kernelSizeMemory, opt.stride, 8 -- batchsize
-                  true, 3 )) -- with cell 2 gate, kernel size 3
-
-
-
+                              opt.output_nSeq, opt.kernelSize, 
+                              opt.kernelSizeMemory, opt.stride, 8 -- batchsize
+                              true, 3 )) -- with cell 2 gate, kernel size 3
 decoder_3:remember('both')
 decoder_3:training()
 
 -------------- middle4, input size 64 to 4 ------------
+local concat = nn.ConcatTable():add(nn.ConcatTable()):add(nn.ConcatTable())
 
 local convForward_4 = nn.SpatialConvolution(opt.nFiltersMemory[2], opt.nFiltersMemory[1], 
-                      self.kc, self.kc, 
-                      self.stride, self.stride, 
-                      self.padc, self.padc)
+                                            self.kc, self.kc, 
+                                            self.stride, self.stride, 
+                                            self.padc, self.padc)
+                      :add(concat)
+                      :add(nn.FlattenTable())
+
 
 --------------------------------------------------------
 -- add connection between encoder_0 and decoder_2, encoder_1 and decoder_3
@@ -103,6 +105,7 @@ local function backwardConnect(encLSTM, decLSTM)
    encLSTM.userNextGradCell = nn.rnn.recursiveCopy(encLSTM.userNextGradCell, decLSTM.userGradPrevCell)
    encLSTM.gradPrevOutput = nn.rnn.recursiveCopy(encLSTM.gradPrevOutput, decLSTM.userGradPrevOutput)
 end
+
 -----------------------------------------------------------
 
 
@@ -193,16 +196,53 @@ local function main()
       
       -- estimate f and gradients
       output = model:updateOutput(inputTable)
-      gradtarget = gradloss:updateOutput(target):clone()
-      gradoutput = gradloss:updateOutput(output)
 
-      f = f + criterion:updateOutput(gradoutput,gradtarget)
+      local output0 = encoder_0:updateOutput(inputTable)
+      local output1 = encoder_1:updateOutput(output1)
+      forwardConnect(encoder_0, decoder_2)
+      forwardConnect(encoder_1, decoder_3)
+      local inputTable2 = {encoder_0.userPrevOutput, encoder_0.userPrevCell}
+      local output2 = decoder_2:updateOutput(inputTable2)
+      local output3 = decoder_3:updateOutput(output2)
+      local inputTable4 = {{output0(-1), output1(-2)},{output2, output3}}
+      local output = convForward_4:updateOutput(input4)
 
+
+      -- gradtarget = gradloss:updateOutput(target):clone()
+      -- gradoutput = gradloss:updateOutput(output)
+
+      -- f = f + criterion:updateOutput(gradoutput,gradtarget)
+      f = criterion:updateOutput(output, target)
       -- gradients
-      local gradErrOutput = criterion:updateGradInput(gradoutput,gradtarget)
-      local gradErrGrad = gradloss:updateGradInput(output,gradErrOutput)
-           
-      model:updateGradInput(inputTable,gradErrGrad)
+--      local gradErrOutput = criterion:updateGradInput(gradoutput,gradtarget)
+--      local gradErrGrad = gradloss:updateGradInput(output,gradErrOutput)
+      
+      -- start backward
+      local gradInput4 = convForward_4:updateGradInput(inputTable4, f)     
+      -- update para:
+      convForward_4:accGradParameters(inputTable4, f)  
+
+--- TODO: check BACKWARD CONNECT FOR CONVFORWARD
+
+      local gradInput3 = decoder_3:updateGradInput(output2, gradInput4[2][2])
+      -- update para:
+      decoder_3:accGradParameters(output2, gradInput4[2][1])
+      -- update para:
+      decoder_2:accGradParameters(output2, gradInput4[2][2])
+
+      backwardConnect(encoder_0, decoder_2)
+      backwardConnect(encoder_1, decoder_3)
+
+-- noinput      local gradInput2 = decoder_2:(output2, gradInput4[2][1])
+      -- update para:
+-- TODO: ADD BP FOR ENCODER
+--      encoder_0:updateGradInput(output2, gradInput4[2][2])
+
+
+
+
+
+      model:updateGradInput(input4, gradErrGrad)
 
       model:accGradParameters(inputTable, gradErrGrad)  
 
