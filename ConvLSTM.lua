@@ -10,7 +10,7 @@ local _ = require 'moses'
 require 'nn'
 require 'dpnn'
 require 'rnn'
-require 'extracunn'
+-- require 'extracunn'
 
 local ConvLSTM, parent = torch.class('nn.ConvLSTM', 'nn.LSTM')
 
@@ -22,7 +22,7 @@ local ConvLSTM, parent = torch.class('nn.ConvLSTM', 'nn.LSTM')
               false)  -- no input for LSTM
 ]]--
 function ConvLSTM:__init(inputSize, outputSize, rho, kc, km, stride, batchSize, cell2gate, ka, inputFlag)
-   
+   print("intputsize", inputSize)
    self.kc = kc or 3
    self.km = km or 3
    self.padc = torch.floor(kc/2) 
@@ -40,8 +40,10 @@ end
 -------------------------- factory methods -----------------------------
 function ConvLSTM:buildGate()
    -- Note : Input is : {input(t), output(t-1), cell(t-1)}
+   
    local gate = nn.Sequential()
    gate:add(nn.NarrowTable(1,2)) -- we don't need cell here
+
    if(self.inputFlag) then
         local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
     else
@@ -53,6 +55,7 @@ function ConvLSTM:buildGate()
        local cell2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
    end
    local para = nn.ParallelTable()
+
    if(self.cell2gate) then
        para:add(input2gate):add(output2gate):add(cell2gate)
    else
@@ -61,6 +64,7 @@ function ConvLSTM:buildGate()
    gate:add(para)
    gate:add(nn.CAddTable())
    gate:add(nn.Sigmoid())
+
    return gate
 end
 
@@ -80,6 +84,8 @@ function ConvLSTM:buildcellGate()
    hidden:add(nn.NarrowTable(1,2))
    local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
    local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
+   --local output2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
+
    local para = nn.ParallelTable()
    para:add(input2gate):add(output2gate)
    hidden:add(para)

@@ -41,7 +41,7 @@ local encoder_0 = nn.Sequencer(nn.ConvLSTM(opt.nFiltersMemory[1],opt.nFiltersMem
                   opt.input_nSeq, opt.kernelSize, 
                   opt.kernelSizeMemory, opt.stride, 8 -- batchsize
                   true, 3 )) -- with cell 2 gate, kernel size 3
-
+inputtable{8, 15, 1, 100, 100}
 
 
 encoder_0:remember('both')
@@ -49,10 +49,11 @@ encoder_0:training()
 
 ------------ middle1, input size 64 to 64 -----------
 
-local encoder_1 = nn.Sequencer(nn.ConvLSTMNo(opt.nFiltersMemory[2],opt.nFiltersMemory[2],  -- 5, 15?
+local encoder_1 = nn.Reshape(4, 50, 50)
+                  :add(nn.Sequencer(nn.ConvLSTMNo(opt.nFiltersMemory[2],opt.nFiltersMemory[2],  -- 5, 15?
                   opt.input_nSeq, opt.kernelSize, 
                   opt.kernelSizeMemory, opt.stride, 8 -- batchsize
-                  true, 3 )) -- with cell 2 gate, kernel size 3
+                  true, 3 ))) -- with cell 2 gate, kernel size 3
 
 encoder_1:remember('both')
 encoder_1:training()
@@ -90,6 +91,7 @@ local convForward_4 = nn.SpatialConvolution(opt.nFiltersMemory[2], opt.nFiltersM
                                             self.padc, self.padc)
                       :add(concat)
                       :add(nn.FlattenTable())
+                      
 
 
 --------------------------------------------------------

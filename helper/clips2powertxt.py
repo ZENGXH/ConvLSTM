@@ -15,7 +15,7 @@ import os
 import random
 import numpy
 import logging
-
+mode = "test"
 ## for test data
 if(mode == "test"):
 	iterator_param = {'path': '../../SPARNN/data/hko-example/hko-test.npz',
@@ -28,9 +28,9 @@ if(mode == "test"):
 	test_iterator.begin(do_shuffle=False)
 	test_iterator.print_stat()
 	data = test_iterator.data
-elif(mode == "train"):
+# elif(mode == "train"):
 
-elif(mode == "valid"):
+# elif(mode == "valid"):
 
 
 imgs = data['input_raw_data']
@@ -40,7 +40,7 @@ startingP_output = [i[0] for i in index[1]]
 print(startingP_input[0:3])
 print(startingP_output[0:3])
 
-print("number of starting points ", len(startingP))
+print("number of starting points ", len(startingP_input))
 print("open " + mode + "seq.txt")
 
 f = open( mode + "seq.txt",'w')
