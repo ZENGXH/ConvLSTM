@@ -30,7 +30,7 @@ end
 
 
   dofile('./hko/opts-hko.lua')    
---  dofile('./hko/data-hko.lua')
+ --  dofile('./hko/data-hko.lua')
 
 -- sample = datasetSeq[3] --
 data = torch.randn(7, 10, 4, 5, 5) -- :fill(torch.randn(0,1))
@@ -135,7 +135,7 @@ in_out = interface:forward(inputTable4)
 
 sequ = nn.Sequencer(nn.SpatialConvolution(2*opt.nFiltersMemory[2], opt.nFiltersMemory[1],
                                             3, 3,
-                                            1,1,
+                                            1, 1,
                                             1, 1))
 sequ:remember('both')
 sequ:training()
@@ -144,9 +144,11 @@ convForward_4 = interface:add(sequ)
 output = convForward_4:forward(inputTable4)
 
 print("input to the sequcer\n", in_out, "\noutput ",pp) 
-targetTable = {}
+-- notice that the input of target should in form of sequence, not table for criterion
+-- but for nn.container should be table
+targetSeq = torch.Tensor(opt.output_nSeq, opt.batchSize, opt.nFiltersMemory[1], opt.width, opt.width)
 for i = 1, opt.output_nSeq do
-  targetTable[i] = data[{{}, {opt.input_nSeq+i}, {}, {}, {}}]:select(2,1)
+  targetSeq[i] = data[{{}, {opt.input_nSeq+i}, {}, {}, {}}]:select(2,1)
 end
 -- se:backward(in_out, {{torch.Tensor(7,4,5,5)},{torch.Tensor(7,4,5,5)},{torch.Tensor(7,4,5,5)},
 -- {torch.Tensor(7,4,5,5)},{torch.Tensor(7,4,5,5)},{torch.Tensor(7,4,5,5)}})
@@ -155,10 +157,10 @@ end
 --        torch.Tensor(7,4,5,5),torch.Tensor(7,4,5,5),torch.Tensor(7,4,5,5),torch.Tensor(7,4,5,5)}
  -- gradO   criterion:backward(pp, targetTable)
 criterion = nn.SequencerCriterion(nn.MSECriterion())
-err = criterion:forward(output, torch.Tensor(6,7,4,5,5))
+err = criterion:forward(output, targetSeq)
 
 ----- == -----
-   gradOutput = criterion:backward(output, torch.Tensor(6,7,4,5,5))
+   gradOutput = criterion:backward(output, targetSeq)
    convForward_4:backward(inputTable4, gradOutput)
    
 -- encLSTM.userNextGradCell = nn.rnn.recursiveCopy(encLSTM.userNextGradCell, decLSTM.userGradPrevCell)

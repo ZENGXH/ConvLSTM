@@ -1,9 +1,9 @@
 require 'image'
 local data_verbose = false
 
-function getdataSeq_mnist()
+function getdataSeq_mnist(data_path)
    -- local data = torch.DiskFile(datafile,'r'):readObject()
-   local data_path = "/Users/zengxiaohui/project/ConvLSTM/helper/data/"
+ --  local data_path = 
    -- data size (totalInstances or nsamples=2000?, sequence_length=20, 1, 64, 64)
    local datasetSeq ={}
    -- data = data:float()/255.0 -- to range(0, 1)
