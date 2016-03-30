@@ -181,7 +181,7 @@ interface = nn.Sequential():add(nn.FlattenTable()):add(nn.JoinTable(1))
 reshape = nn.View(opt.nFiltersMemory[1], 100, 100) -- reshape to 2 * 100 * 100
 -- one for inputs images , one for girds???
 
-sequ = nn.Sequencer(nn.Sequential():add(nn.SpatialConvolution(opt.nFiltersMemory[2], 
+sequ = nn.Sequencer(nn.Sequential():add(nn.SpatialConvolution(opt.nFiltersMemory[2] * 2, 
 										opt.nFiltersMemory[1] * opt.nFiltersMemory[1], 
                                         3, 3, 1, 1, 1, 1))
                                     :add(reshape)
