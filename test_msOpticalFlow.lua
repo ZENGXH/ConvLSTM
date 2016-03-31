@@ -51,6 +51,8 @@ require 'DenseTransformer2D'
 require 'nn'
 require 'rnn'
 require 'ConvLSTM_NoInput'
+local paraInit = 0.01
+local std = 0.01
 
 if onMac then
 	print('on mac, SpatialConvolutionNoBias replace')
@@ -108,7 +110,7 @@ encoder_0 = nn.Sequencer(nn.ConvLSTM(opt.nFiltersMemory[1], opt.nFiltersMemory[2
 
 
 local lstm_params0, lstm_grads0 = encoder_0:getParameters()
-lstm_params0:normal(0,3)
+lstm_params0:normal(paraInit, std)
 
 ----------------------------------
 
@@ -118,22 +120,29 @@ encoder_1 = nn.Sequencer(nn.ConvLSTM(opt.nFiltersMemory[2], opt.nFiltersMemory[2
                   true, 3, true )):float() -- with cell 2 gate, kernel size 3
 
 local lstm_params1, lstm_grads1 = encoder_1:getParameters()
-lstm_params1:normal(0, 0.01)
+lstm_params1:normal(paraInit, std)
 
 print('encoder_1 build')
 --checkMemory()
 model = nn.Sequencer
 -----------------------------------
-
+--[[
 decoder_2 = nn.Sequencer(nn.ConvLSTM_NoInput(opt.nFiltersMemory[2], opt.nFiltersMemory[2],  -- 64, 64 inputSize and outputSize
                                       opt.output_nSeq,             -- length of seq
                                       0, opt.kernelSizeMemory,     -- size of kernel for intput2gate and memory2gate
                                       opt.stride, opt.batchSize,   -- stride and batchsize
                                       true, 3, -- with previous cell to gate, kernel size 3
                                       false)):float()  -- no input for LST
+]]
+decoder_2 = nn.Sequencer(nn.ConvLSTM(opt.nFiltersMemory[2], opt.nFiltersMemory[2],  -- 64, 64 inputSize and outputSize
+                                      opt.output_nSeq,             -- length of seq
+                                      opt.kernelSize,opt.kernelSizeMemory,     -- size of kernel for intput2gate and memory2gate
+                                      opt.stride, opt.batchSize,   -- stride and batchsize
+                                      true, 3, -- with previous cell to gate, kernel size 3
+                                      true)):float()  -- no input for LST
 
 local lstm_params2, lstm_grads2 = decoder_2:getParameters()
-lstm_params2:normal(0, 0.01)
+lstm_params2:normal(paraInit, std)
 
 
 ------------ middle3, input size 64 to 64 ------------
@@ -144,7 +153,7 @@ decoder_3 = nn.Sequencer(nn.ConvLSTM(opt.nFiltersMemory[2],opt.nFiltersMemory[2]
                               true, 3, true )):float() -- with cell 2 gate, kernel size 3
 
 local lstm_params3, lstm_grads3 = decoder_3:getParameters()
-lstm_params3:normal(0, 0.01)
+lstm_params3:normal(paraInit, std)
 
 print('decoder_3 build')
 --checkMemory()
@@ -156,38 +165,30 @@ if gpuflag then
 	myzeroTensor = myzeroTensor:cuda()
 end
 --assert(myzeroTensor:type() == "torch.cudaTensor")
-print('myzeroTensor type is ', myzeroTensor:type())
+--print('myzeroTensor type is ', myzeroTensor:type())
 
 
 ----------- build the block for convForward_4
-concat = nn.ConcatTable()
---[[
-for i = 1, opt.output_nSeq do
-    s1 = nn.SelectTable(i)
-    s2 = nn.SelectTable(i + opt.output_nSeq - 2)
-    con = nn.ConcatTable():add(s1):add(s2)
-    f = nn.Sequential():add(con):add(nn.JoinTable(2,4))
-    concat:add(f)
-end
+
 
 
 flat1 = nn.ParallelTable():add(nn.FlattenTable()):add(nn.FlattenTable())
-interface = nn.Sequential():add(flat1):add(nn.FlattenTable()):add(concat)
-]]
+--  interface = nn.Sequential():add(flat1):add(nn.FlattenTable()):add(concat)
 
-interface = nn.Sequential():add(nn.FlattenTable()):add(nn.JoinTable(1))
+
+-- interface = nn.Sequential():add(nn.FlattenTable()):add(nn.JoinTable(1))
 -- convForward_4 = interface:float()
 
 reshape = nn.View(opt.nFiltersMemory[1], 100, 100) -- reshape to 2 * 100 * 100
 -- one for inputs images , one for girds???
 
 sequ = nn.Sequencer(nn.Sequential():add(nn.SpatialConvolution(opt.nFiltersMemory[2] * 2, 
-										opt.nFiltersMemory[1] * opt.nFiltersMemory[1], 
+										opt.nFiltersMemory[1], 
                                         3, 3, 1, 1, 1, 1))
                                     :add(reshape)
                                     :add(flow)):float()
-local lstm_params4, lstm_grads4 = sequ:getParameters()
-lstm_params4:normal(0,0.01)
+
+
 --sequ:add(flow):add(reshape) -- depth = opt.nFiltersMemory, w,h = opt.memorySizeW = 50
 --[[
 memory_branch = nn.Sequential():float()
@@ -200,31 +201,70 @@ local branch_up = nn.Sequential():add(nn.Sequencer(nn.Sequential()
                                                    :add(nn.SpatialConvolution(2 * opt.nFiltersMemory[2], opt.nFiltersMemory[1], 1, 1, 1, 1, 0, 0))
 											       :add(nn.View(opt.imageDepth, opt.imageH, opt.imageW))
 											       :add(nn.Transpose({1,3},{1,2})))):float()	  
-]]
+
 -- originally: [depth, height, width]
 -- after transpose [height, width, depth]
-concat = nn.ConcatTable()
-local memory_branch = sequ
-local branch_up = nn.Sequencer(nn.Sequential()
-                               :add(nn.View(opt.nFiltersMemory[2] , opt.width, opt.width ))
-                               :add(nn.SpatialConvolution(opt.nFiltersMemory[2], opt.nFiltersMemory[1], 1, 1, 1, 1, 0, 0))
-						       :add(nn.View(opt.imageDepth, opt.imageH, opt.imageW))
-						       :add(nn.Transpose({1,3},{1,2}))):float()
 
+local memory_branch2 = sequ
+local branch_up2 = nn.Sequencer(nn.Sequential()
+                               :add(nn.View(opt.nFiltersMemory[2] * 2 , opt.width, opt.width ))
+                               :add(nn.SpatialConvolution(opt.nFiltersMemory[2] * 2, opt.nFiltersMemory[1], 1, 1, 1, 1, 0, 0))
+						       :add(nn.View(opt.imageDepth, opt.imageH, opt.imageW))
+						       :add(nn.Transpose({1,3}, {1,2}))):float()
+]]
+local interface = nn.ConcatTable()
+
+for i = 1, opt.output_nSeq do
+    local s1 = nn.SelectTable(i)
+    local s2 = nn.SelectTable(i + opt.output_nSeq)
+    local con = nn.ConcatTable():add(s1):add(s2)
+    local f = nn.Sequential():add(con):add(nn.JoinTable(2))
+    interface:add(f)
+end
+
+local branch_up = nn.Sequential()
+                               :add(nn.View(opt.nFiltersMemory[2] * 2 , opt.width, opt.width ))
+                               :add(nn.SpatialConvolution(opt.nFiltersMemory[2] * 2, opt.nFiltersMemory[1], 3, 3, 1, 1, 1, 1))
+						       :add(nn.View(opt.imageDepth, opt.imageH, opt.imageW))
+						       :add(nn.Transpose({1,3}, {1,2})):float()
+local memory_branch = nn.Sequential():add(nn.SpatialConvolution(opt.nFiltersMemory[2] * 2, 
+										opt.nFiltersMemory[1], 
+                                        3, 3, 1, 1, 1, 1))
+                                    :add(reshape)
+                                    :add(flow):float() 
 --branch_up:add(nn.JoinTable(1)) -- along width direction
 --memory_branch:add(nn.JoinTable(1)) -- along width direction
 if not wrapOpticalFlow then
-	
 	print('not optical flow warpping')
+	local concat = nn.ConcatTable()
 	concat:add(branch_up):add(branch_up)
-	convForward_4 = nn.Sequential()
+	wrapConcat = nn.Sequential():add(concat):add(nn.SelectTable(1)):add(nn.Transpose({1,3}, {2,3}))
+	local sampler = nn.Sequencer(wrapConcat):float()
+	convForward_4 = nn.Sequential():add(nn.FlattenTable()):add(interface):add(sampler):float()
+--	convForward_4 = nn.Sequential():add(nn.FlattenTable()):add(sampler):float()
+
+	convForward_4 = convForward_4:float()
+	--	sampler = concat--:add(nn.CAddTable()):float()
+--[[	sequencer_output2 = nn.Sequencer(nn.Sequential()
+									:add(concat)
+									:add(nn.CAddTable())
+									:add(nn.Transpose({1,3}, {2,3}))
+									)
+--	sequencer_output3 = sequencer_output2:clone()
+	
 	convForward_4:add(nn.Sequencer(nn.Sequential()
 									:add(concat)
 									:add(nn.CAddTable())
 									:add(nn.Transpose({1,3}, {2,3}))
-									))
-	convForward_4:add(nn.FlattenTable()):add(nn.CAddTable())
+									))]]
+
+--	convForward_4 = nn.ParallelTable():add(sequencer_output2):add(sequencer_output3)
+
+--	convForward_4:add(nn.FlattenTable()):add(nn.CAddTable())
 				
+	
+--	sequencer_output2:add(nn.Sequential():add(nn.NarrowTable(4, 6)))
+										--	:add(sequencer_output2))
 
 --	convForward_4:add(nn.Sequencer(nn.Transpose({1,3}, {2,3}))):float()
 
@@ -232,15 +272,22 @@ if not wrapOpticalFlow then
            		 :add(nn.View(opt.imageDepth, opt.imageH, opt.imageW, opt.output_nSeq))
             	 :add(nn.SplitTable(4))]]
 else
-    concat:add(branch_up):add(memory_branch)
-    convForward_4:add(concat)
+	local concat = nn.ConcatTable()
+	concat:add(branch_up):add(memory_branch)
+	wrapConcat = nn.Sequential():add(concat):add(nn.BilinearSamplerBHWD()):add(nn.Transpose({1,3}, {2,3}))
+	local sampler = nn.Sequencer(wrapConcat):float()
     -- add sampler
     -- convForward_4:add(nn.BilinearSamplerBHWD())
-	convForward_4:add(nn.Sequencer(nn.Sequential()
+--[[	convForward_4:add(nn.Sequencer(nn.Sequential()
 									:add(nn.BilinearSamplerBHWD())
 									:add(nn.Transpose({1,3}, {2,3}))))
-end
+]]
+	convForward_4 = nn.Sequential():add(nn.FlattenTable()):add(interface):add(sampler):float()
+	-- convForward_4 = convForward_4:float()
 
+end
+local lstm_params4, lstm_grads4 = convForward_4:getParameters()
+lstm_params4:normal(paraInit, std)
 --convForward_4:add(nn.Transpose({1,3}, {2,3}))
 --             :add(nn.View(opt.imageDepth, opt.imageH, opt.imageW, opt.output_nSeq))
 
@@ -308,25 +355,26 @@ function train()
 
 	inputTable = {}
 
-	data:resize(opt.batchSize, opt.nSeq, opt.nFiltersMemory[1], opt.width, opt.width):float()
-
-
+--	data:resize(opt.batchSize, opt.nSeq, opt.nFiltersMemory[1], opt.width, opt.width):float()
+	data:resize(opt.batchSize, opt.nSeq, opt.imageDepth, opt.imageH, opt.imageW):float()
+	
 --	print(data:type())
 --    print('input data size,', data:size())
+--    print(data[{{}, {1}, {}, {}, {}}]:select(2,1))
     local  inputTable = {}
 
 	for i = 1, opt.input_nSeq do
 	    if opt.batchSize == 0 then
 	    if gpuflag then
-      	        table.insert(inputTable, data[{{i}, {}, {}, {}}]:select(2,1):cuda())
+      	        table.insert(inputTable, data[{{i}, {}, {}, {}}]:select(2,1):reshape(1, opt.nFiltersMemory[1], opt.width, opt.width):cuda())
       	    else
-      	    	table.insert(inputTable, data[{{i}, {}, {}, {}}]:select(2,1))
+      	    	table.insert(inputTable, data[{{i}, {}, {}, {}}]:select(2,1):reshape(1, opt.nFiltersMemory[1], opt.width, opt.width))
       	    end
       	else
       	    if gpuflag then
-                table.insert(inputTable, data[{{}, {i}, {}, {}, {}}]:select(2,1):cuda())
+                table.insert(inputTable, data[{{}, {i}, {}, {}, {}}]:select(2,1):reshape(1, opt.nFiltersMemory[1], opt.width, opt.width):cuda())
             else
-            	table.insert(inputTable, data[{{}, {i}, {}, {}, {}}]:select(2,1))
+            	table.insert(inputTable, data[{{}, {i}, {}, {}, {}}]:select(2,1):reshape(1, opt.nFiltersMemory[1], opt.width, opt.width))
             end
         end
 	end
@@ -338,17 +386,31 @@ function train()
 --	assert(output0[1] ~= nil)
 
 	output1 = encoder_1:updateOutput(output0)
+--	print('output1')
 --[[	assert(output1[1] ~= nil)
 	assert(encoder_0.module.outputs[opt.input_nSeq] ~= nil)
 --	print(encoder_1.module.outputs)
 	assert(encoder_1.module.outputs[opt.input_nSeq] ~= nil)
 	assert(encoder_0.module.cells[opt.input_nSeq] ~= nil)
 	assert(encoder_1.module.cells[opt.input_nSeq] ~= nil)
-]]
+
 	decoder_2.module.userPrevOutput = nn.rnn.recursiveCopy(decoder_2.module.userPrevOutput, encoder_0.module.outputs[opt.input_nSeq])
 	decoder_2.module.userPrevCell = nn.rnn.recursiveCopy(decoder_2.module.userPrevCell, encoder_0.module.cells[opt.input_nSeq])
 	decoder_3.module.userPrevOutput = nn.rnn.recursiveCopy(decoder_3.module.userPrevOutput, encoder_1.module.outputs[opt.input_nSeq])
 	decoder_3.module.userPrevCell = nn.rnn.recursiveCopy(decoder_3.module.userPrevCell, encoder_1.module.cells[opt.input_nSeq])
+]]
+	decoder_2.modules[1].outputs[1] = encoder_0.modules[1].outputs[opt.input_nSeq]:clone()
+	
+	decoder_2.modules[1].cells[1] = encoder_0.modules[1].cells[opt.input_nSeq]:clone()
+	decoder_2.modules[1].cell = decoder_2.modules[1].cells[1]
+	decoder_2.modules[1].output = decoder_2.modules[1].outputs[1]
+	decoder_2.modules[1].step = 2
+
+	decoder_3.modules[1].outputs[1] = encoder_1.modules[1].outputs[opt.input_nSeq]:clone()
+	decoder_3.modules[1].cells[1] = encoder_1.modules[1].cells[opt.input_nSeq]:clone()
+	decoder_3.modules[1].step = 2
+	decoder_3.modules[1].cell = decoder_3.modules[1].cells[1]
+	decoder_3.modules[1].output = decoder_3.modules[1].outputs[1]	
 --[[
 	assert(decoder_2.module.userPrevOutput ~= nil)
 	assert(decoder_2.module.userPrevCell ~= nil)
@@ -366,27 +428,32 @@ function train()
 		if gpuflag then
 	        table.insert(ini, myzeroTensor:cuda())
 	    else
-	    	table.insert(ini, myzeroTensor)
+	    	table.insert(ini, output0[opt.output_nSeq])
 	    end
 	end
 
 --	print('\nforward to decoder_2====>')
 --	checkMemory()
 	
-	output2 = decoder_2:updateOutput(ini)	
-    
---    assert(output2[1] ~= nil)
+	decoder_2:updateOutput(ini)	
+	output2 = decoder_2.modules[1].outputs
+
+--  print(decoder_2.output)
+--  print(decoder_2.modules[1].step)
+--  assert(output2[1] ~= nil)
 --	print('...')
 --	checkMemory()
 --	print('\nforward to decoder_3====>')
 --	checkMemory()
 	
-	output3 = decoder_3:updateOutput(output2)
-
+	
+	decoder_3:updateOutput(decoder_2.output)
+	output3 = decoder_3.modules[1].outputs
 --	assert(output3[1] ~= nil)
 --	print('...')
+
 	checkMemory()
-	print('\nforward to convForward_4====>')
+--	print('\nforward to convForward_4====>')
 	checkMemory()
 
 --	inputTable4 = {{{output0[opt.input_nSeq]}, output2},{{output1[opt.input_nSeq]}, output3}}
@@ -400,12 +467,13 @@ if underLowMemory then
 	decoder_3:float() 
 	checkMemory()
 end
+--    print('input of convolution forward_4:')
+--    print(inputTable4)
 
 	output = convForward_4:forward(inputTable4)
 
-    print('input of convolution forward_4:')
-    print(inputTable4)
-	
+
+--[[	
 	print('output of CONVOLUTION forward, ')
 
 if torch.isTensor(output) then 
@@ -413,12 +481,12 @@ if torch.isTensor(output) then
 	else
         print(output)
 	end
-
+]]
 --        local opticalFlow = convForward_4.modules[4].output
 --	print('4,2,1')
 --	print('4,2,1,1,1,3,7')
 --        print(convForward_4.modules[4].modules[2].modules[1].modules[1].modules[1].modules[3].modules[7].output)
-    if saveOutput and math.fmod(t , 50) == 1 and t > 1 then
+    if saveOutput and math.fmod(t , 15) == 1 and t > 1 then
     	if wrapOpticalFlow then   
             local optical_flow = convForward_4.modules[4].modules[2].modules[1].modules[1].modules[1].modules[3].modules[7].output
     	    local imflow = flow2colour(optical_flow)
@@ -429,48 +497,86 @@ if torch.isTensor(output) then
             image.save(epochSaveDir..'output-iter'..tostring(iter)..'.png',  output)
         else
        	    for numsOfOut = 1, table.getn(output) do
-	    	    image.save(epochSaveDir..'output-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  output[numsOfOut])
+       	    	local img = output[numsOfOut]:clone():float():resize(1,100,100)
+	    	    image.save(epochSaveDir..'output-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
 	    	end
+	    	for numsOfOut = 1, table.getn(output2) do
+       	    	local img = output2[numsOfOut]:clone():float():resize(1,100,100)
+	    	    image.save(epochSaveDir..'output2-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
+	    	end
+	    	for numsOfOut = 1, table.getn(output3) do
+       	    	local img = output3[numsOfOut]:clone():float():resize(1,100,100)
+	    	    image.save(epochSaveDir..'output3-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
+	    	end	    
+
+	    	for numsOfOut = 1, table.getn(gradOutput) do
+       	    	local img = gradOutput[numsOfOut]:clone():float():resize(1,1700,100)
+       	    	img = img:mul(1/img:max())
+	    	    image.save(epochSaveDir..'gradOutput-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
+	    	end
+ 
+	    	for numsOfOut = 1, table.getn(convForward_4.gradInput[1]) do
+       	    	local img = convForward_4.gradInput[1][numsOfOut]:clone():float():resize(1,1700,100)
+       	    	img = img:mul(1/img:max())
+	    	    image.save(epochSaveDir..'convForward_4.gradInput[1]-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
+	    	end	  
+
+	    	for numsOfOut = 1, table.getn(convForward_4.gradInput[2]) do
+       	    	local img = convForward_4.gradInput[2][numsOfOut]:clone():float():resize(1,1700,100)
+       	    	img = img:mul(1/img:max())
+	    	    image.save(epochSaveDir..'convForward_4.gradInput[2]-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
+	    	end  	    	
+
+	    	for numsOfOut = 1, table.getn(output0) do
+       	    	local img = output0[numsOfOut]:clone():float():resize(1,1700,100)
+       	    	-- img = img:mul(1/img:max())
+	    	    image.save(epochSaveDir..'output0-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
+	    	end 
+
+	    	for numsOfOut = 1, table.getn(output1) do
+       	    	local img = output1[numsOfOut]:clone():float():resize(1,1700,100)
+       	    	-- img = img:mul(1/img:max())
+	    	    image.save(epochSaveDir..'output1-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
+	    	end 
+	    	
+       	    	-- local img = output1[numsOfOut]:clone():float():resize(1,100,100)
+
+	    	
+
+
         end
         print('image save')
     end
 
---	print('...')
---	checkMemory()
----- ############################
-
-	-- print("input to the sequcer\n", in_out, "\noutput ",pp) 
-	-- notice that the input of target should in form of sequence, not table for criterion
-	-- but for nn.container should be table
-	-- se:backward(in_out, {{torch.Tensor(7,4,5,5)},{torch.Tensor(7,4,5,5)},{torch.Tensor(7,4,5,5)},
-	-- {torch.Tensor(7,4,5,5)},{torch.Tensor(7,4,5,5)},{torch.Tensor(7,4,5,5)}})
-	--    targets = {torch.Tensor(7,4,5,5),torch.Tensor(7,4,5,5),
-	--        torch.Tensor(7,4,5,5),torch.Tensor(7,4,5,5),torch.Tensor(7,4,5,5),torch.Tensor(7,4,5,5)}
-	 -- gradO   criterion:backward(pp, targetTable)
-
 	criterion = nn.SequencerCriterion(nn.MSECriterion()):float()
 	if gpuflag then criterion:cuda() end
      
-    local targetSeq = torch.Tensor(opt.output_nSeq, opt.batchSize, opt.imageDepth, opt.imageH, opt.imageW):float()
-	
-	for i = 1, opt.output_nSeq do
-	  targetSeq[i] = data[{{}, {opt.input_nSeq + i}, {}, {}, {}}]:select(2,1):resizeAs(targetSeq[i])
+   local targetSeq = torch.Tensor(opt.output_nSeq, opt.batchSize, opt.imageDepth, opt.imageH, opt.imageW):float()
+   local target = {}
+--	local targetSeq = torch.Tensor(opt.output_nSeq, opt.batchSize, opt.nFiltersMemory[1], opt.width, opt.width):float()
+	if opt.batchSize == 1 then
+		for i = 1, opt.output_nSeq do
+		  target[i] = data[{{}, {opt.input_nSeq + i}, {}, {}, {}}]:resizeAs(targetSeq[i])
+
+		end
+	else
+		print('opt.batchSize > 1 !!')
+		targetSeq[i] = data[{{}, {opt.input_nSeq + i}, {}, {}, {}}]:select(2,1):resizeAs(targetSeq[i])
+
 	end
         if gpuflag then targetSeq = targetSeq:cuda() end
---[[
-    if epoch == 1 and t == 1 then
-	    print('size of target: ')
-    	print(targetSeq:size())
-    end
 
-	print(output)
-	print(targetSeq)
-]]
-	err = criterion:forward(output, targetSeq)
+        if saveOutput and math.fmod(t , 15) == 1 and t > 1 then
+	    	for numsOfOut = 1, table.getn(target) do
+       	    	local img = target[numsOfOut]:clone():float():resize(1,100,100)
+       	    	-- img = img:mul(1/img:max())
+	    	    image.save(epochSaveDir..'target-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  img)
+	    	end 
+    	end
+
+	err = criterion:forward(output, target)
 	
 	print("\titer",t, "err:", err)
---	local toc = torch.toc(tic)
---	print('time used: ' , toc)
 
 	print('\ncriterion start bp <=======')  -- 1
 	checkMemory()
@@ -482,43 +588,38 @@ if torch.isTensor(output) then
     targetSeq = nil
 	convForward_4.outputs = {}
 
-	collectgarbage() -- 3
---	print("...forget")
+	--print(gradOutput)
 	--checkMemory()
 
 -------------------------------
 	print('\nconv_4 bp <=======')  -- 1
 	--checkMemory()
 
-        convForward_4:backwardUpdate(inputTable4, gradOutput, learningRate)
--- 	print("...") -- 2
-	--checkMemory()
-
-        convForward_4:zeroGradParameters()
+    convForward_4:backwardUpdate(inputTable4, gradOutput, learningRate)
+    convForward_4:zeroGradParameters()
 
 if underLowMemory then
 	print('underLowMemory')
 	checkMemory()
-		encoder_0:float() 
-		encoder_1:float() 
-		decoder_2:float()
-		decoder_3:float() 
+	encoder_0:float() 
+	encoder_1:float() 
+	decoder_2:float()
+	decoder_3:float() 
 	checkMemory()
 
 end
 
-	gardOutput_encoder_0 = convForward_4.gradInput[1][1]
-	gardOutput_encoder_1 = convForward_4.gradInput[2][1]
-	gardOutput_decoder_2 = convForward_4.gradInput[1][2]
-	gardOutput_decoder_3 = convForward_4.gradInput[2][2]
+	gardOutput_encoder_0 = {convForward_4.gradInput[1][1]}
+	gardOutput_encoder_1 = {convForward_4.gradInput[2][1]}
+	gardOutput_decoder_2 = nn.NarrowTable(2, opt.output_nSeq - 1):forward(convForward_4.gradInput[1])
+	gardOutput_decoder_3 = nn.NarrowTable(2, opt.output_nSeq - 1):forward(convForward_4.gradInput[2])
 
 
     convForward_4:zeroGradParameters()
---	convForward_4:clearState()
 	convForward_4.output = {}
 
-	collectgarbage() -- 3
---	print("...forget")
+
+	--print("...forget")
 	--checkMemory()
 --------------------------------
 	print('\ndecoder_3 bp <=======')  -- 1
@@ -534,16 +635,16 @@ if underLowMemory then
 end
 	decoder_3:backward(decoder_2.output, gardOutput_decoder_3)
 	decoder_3:updateParameters(learningRate)
--- 	print("...") -- 2
+ 	print("...") -- 2
 	--checkMemory()
 
 --	assert(decoder_3.module.userGradPrevCell ~= nil)
 --	assert(decoder_3.module.userGradPrevOutput ~= nil)
 	-- copy for backward
-	gardOutput_decoder_2 = {}
+	--gardOutput_decoder_2 = {}
 
 	for i = 1, opt.output_nSeq - 1 do
-	    gardOutput_decoder_2[i] = decoder_3.gradInput[i] 
+--	    gardOutput_decoder_2[i] = gardOutput_decoder_2[i] + decoder_3.gradInput[i] 
 	-- + convForward_4.gradInput[1][2][i] -- omit this one to save memory
 	end
 	
@@ -553,16 +654,23 @@ end
 if underLowMemory then
 	encoder_1:cuda()
 end
-	encoder_1.module.userNextGradCell = nn.rnn.recursiveCopy(encoder_1.module.userNextGradCell, 
-														decoder_3.module.userGradPrevCell)
+	-- decoder_3.userPrevCell = true
+
+	encoder_1.module.gradCells[opt.input_nSeq] = nn.rnn.recursiveCopy(encoder_1.module.userGradPrevCell, 
+														decoder_3.module.gradCells[1])
 	encoder_1.module.gradPrevOutput = nn.rnn.recursiveCopy(encoder_1.module.gradPrevOutput, 
-														decoder_3.module.userGradPrevOutput)
+														decoder_3.module.gradPrevOutput[1])
 
 --	decoder_3.module:clearAll_paraLeftOnly()
 	decoder_3.module:forget()
 	collectgarbage() -- 3
---	print("...forget")
+	print("...forget")
 	--checkMemory()
+--	print(gardOutput_encoder_1)
+	encoder_1:backwardUpdate({output0[opt.input_nSeq]}, gardOutput_encoder_1, learningRate)
+--	encoder_1.module:clearAll_paraLeftOnly()
+	encoder_1.module:forget()
+--	print('encoder_1 done bp')
 ----------------------------------
 
 	-------- backward connect:
@@ -576,31 +684,38 @@ end
 if underLowMemory then
 	encoder_0:cuda()
 end
-	encoder_0.module.userNextGradCell = nn.rnn.recursiveCopy(encoder_0.module.userNextGradCell, 
-															decoder_2.module.userGradPrevCell)
+	encoder_0.module.gradCells[opt.input_nSeq] = nn.rnn.recursiveCopy(encoder_0.module.userGradPrevCell, 
+														decoder_2.module.gradCells[1])
 	encoder_0.module.gradPrevOutput = nn.rnn.recursiveCopy(encoder_0.module.gradPrevOutput, 
-															decoder_2.module.userGradPrevOutput)
+														decoder_2.module.gradPrevOutput[1])
 
---	print('decoder_2 bp done, before cleaning:')
-	--checkMemory()
+--	decoder_3.module:clearAll_paraLeftOnly()
+	decoder_3.module:forget()
+--	collectgarbage() -- 3
+--	print("...forget")
+	checkMemory()
+	print(gardOutput_encoder_1)
+	gardOutput_encoder_0 = {gardOutput_encoder_0[1] + encoder_1.module.gradInput}
+	encoder_0:backwardUpdate({inputTable[opt.input_nSeq]}, gardOutput_encoder_0, learningRate)
+--	encoder_1.module:clearAll_paraLeftOnly()
+	encoder_0.module:forget()
+--	print(encoder_1.modules[1].gradInput)
+--	encoder_0:backwardUpdate(inputTable, encoder_1.module.gradInput,learningRate)
+--	print('encoder_0 done bp')
+	encoder_0.module:forget()
 
---	decoder_2.module:clearAll_paraLeftOnly()
-	decoder_2.module:forget()
 	ini = {}
 	
 --	print('decoder_2 bp done:')
 	--checkMemory()
 ----------------------------------
-	encoder_1:backwardUpdate({output0[opt.input_nSeq]}, gardOutput_encoder_1, learningRate)
---	encoder_1.module:clearAll_paraLeftOnly()
-	encoder_1.module:forget()
 --	print('encoder_1 bp done:')
 	--checkMemory()
 
     
-	encoder_0:backwardUpdate({inputTable[opt.input_nSeq]}, gardOutput_encoder_0, learningRate)
+--	encoder_0:backwardUpdate({inputTable[opt.input_nSeq]}, gardOutput_encoder_0, learningRate)
 --	encoder_0.module:clearAll_paraLeftOnly()
-	encoder_0.module:forget()
+--	encoder_0.module:forget()
 	convForward_4:forget()
 --	print('encoder_0 bp done:')
 	checkMemory()
@@ -652,7 +767,8 @@ end
    	   saveModel(convForward_4, 'convForward_4', t)
    end
 ]]
-  collectgarbage()
+--  collectgarbage()
+	checkMemory()
   end
 epoch = epoch + 1
 end
@@ -707,43 +823,63 @@ function valid()
 --   assert(data:size()[1] == 20 and data:nDimension() == 4, 'runnning optical_flow, ensure batchsize is 1')  
 --	if gpuflag then data:cuda() end
 	inputTable = {}
-	if(opt.batchSize == 0) then
-		data:resize(opt.nSeq, opt.nFiltersMemory[1], opt.width, opt.width):float()
-		-- resize into [20, 4, 50, 50]
-	else 
-		data:resize(opt.batchSize, opt.nSeq, opt.nFiltersMemory[1], opt.width, opt.width):float()
-	end
 
+--	data:resize(opt.batchSize, opt.nSeq, opt.nFiltersMemory[1], opt.width, opt.width):float()
+	data:resize(opt.batchSize, opt.nSeq, opt.imageDepth, opt.imageH, opt.imageW):float()
+	
 --	print(data:type())
 --    print('input data size,', data:size())
+--    print(data[{{}, {1}, {}, {}, {}}]:select(2,1))
     local  inputTable = {}
 
 	for i = 1, opt.input_nSeq do
 	    if opt.batchSize == 0 then
-	  		if gpuflag then
-      	        table.insert(inputTable, data[{{i}, {}, {}, {}}]:select(2,1):cuda())
+	    if gpuflag then
+      	        table.insert(inputTable, data[{{i}, {}, {}, {}}]:select(2,1):reshape(1, opt.nFiltersMemory[1], opt.width, opt.width):cuda())
       	    else
-      	    	table.insert(inputTable, data[{{i}, {}, {}, {}}]:select(2,1))
+      	    	table.insert(inputTable, data[{{i}, {}, {}, {}}]:select(2,1):reshape(1, opt.nFiltersMemory[1], opt.width, opt.width))
       	    end
       	else
-      	  	if gpuflag then
-                table.insert(inputTable, data[{{}, {i}, {}, {}, {}}]:select(2,1):cuda())
+      	    if gpuflag then
+                table.insert(inputTable, data[{{}, {i}, {}, {}, {}}]:select(2,1):reshape(1, opt.nFiltersMemory[1], opt.width, opt.width):cuda())
             else
-            	table.insert(inputTable, data[{{}, {i}, {}, {}, {}}]:select(2,1))
+            	table.insert(inputTable, data[{{}, {i}, {}, {}, {}}]:select(2,1):reshape(1, opt.nFiltersMemory[1], opt.width, opt.width))
             end
         end
 	end
 
 
+	-- #todo: buffer parameters
+	-- inputTable:cuda() 
 	output0 = encoder_0:updateOutput(inputTable)
+--	assert(output0[1] ~= nil)
 
 	output1 = encoder_1:updateOutput(output0)
 
-	decoder_2.module.userPrevOutput = nn.rnn.recursiveCopy(decoder_2.module.userPrevOutput, encoder_0.module.outputs[opt.input_nSeq])
-	decoder_2.module.userPrevCell = nn.rnn.recursiveCopy(decoder_2.module.userPrevCell, encoder_0.module.cells[opt.input_nSeq])
-	decoder_3.module.userPrevOutput = nn.rnn.recursiveCopy(decoder_3.module.userPrevOutput, encoder_1.module.outputs[opt.input_nSeq])
-	decoder_3.module.userPrevCell = nn.rnn.recursiveCopy(decoder_3.module.userPrevCell, encoder_1.module.cells[opt.input_nSeq])
+	decoder_2.modules[1].outputs[1] = encoder_0.modules[1].outputs[opt.input_nSeq]:clone()
+	
+	decoder_2.modules[1].cells[1] = encoder_0.modules[1].cells[opt.input_nSeq]:clone()
+	decoder_2.modules[1].cell = decoder_2.modules[1].cells[1]
+	decoder_2.modules[1].output = decoder_2.modules[1].outputs[1]
+	decoder_2.modules[1].step = 2
 
+	decoder_3.modules[1].outputs[1] = encoder_1.modules[1].outputs[opt.input_nSeq]:clone()
+	decoder_3.modules[1].cells[1] = encoder_1.modules[1].cells[opt.input_nSeq]:clone()
+	decoder_3.modules[1].step = 2
+	decoder_3.modules[1].cell = decoder_3.modules[1].cells[1]
+	decoder_3.modules[1].output = decoder_3.modules[1].outputs[1]	
+--[[
+	assert(decoder_2.module.userPrevOutput ~= nil)
+	assert(decoder_2.module.userPrevCell ~= nil)
+	assert(decoder_3.module.userPrevOutput ~= nil)
+	assert(decoder_3.module.userPrevCell ~= nil)
+]]
+--	print('decoder_2', decoder_2.module.userPrevOutput)
+--	print('decoder_2', decoder_2.module.userPrevCell)
+
+	-- inputTable2 = {decoder_2.module.userPrevOutput, decoder_2.module.userPrevCell}
+	
+	-- create fake input..
 	ini = {}
 	for i = 1, opt.output_nSeq - 1 do
 		if gpuflag then
@@ -752,55 +888,49 @@ function valid()
 	    	table.insert(ini, myzeroTensor)
 	    end
 	end
+
+--	print('\nforward to decoder_2====>')
+--	checkMemory()
 	
-	output2 = decoder_2:updateOutput(ini)	
-    	
-	output3 = decoder_3:updateOutput(output2)
+	decoder_2:updateOutput(ini)	
+	output2 = decoder_2.modules[1].outputs
+
+--    print(decoder_2.output)
+--    print(decoder_2.modules[1].step)
+--    assert(output2[1] ~= nil)
+--	print('...')
+--	checkMemory()
+--	print('\nforward to decoder_3====>')
+--	checkMemory()
+	
+	
+	decoder_3:updateOutput(decoder_2.output)
+	output3 = decoder_3.modules[1].outputs
+--	assert(output3[1] ~= nil)
+--	print('...')
 
 	checkMemory()
-	print('\nforward to convForward_4====>')
+--	print('\nforward to convForward_4====>')
 	checkMemory()
 
-	inputTable4 = {{{output0[opt.input_nSeq]}, output2},{{output1[opt.input_nSeq]}, output3}}
-
+--	inputTable4 = {{{output0[opt.input_nSeq]}, output2},{{output1[opt.input_nSeq]}, output3}}
+	inputTable4 = {output2, output3}
+if underLowMemory then
+	print('underLowMemory, move all to float')
+	checkMemory()
+	encoder_0:float() 
+	encoder_1:float() 
+	decoder_2:float()
+	decoder_3:float() 
+	checkMemory()
+end
+--    print('input of convolution forward_4:')
+--    print(inputTable4)
 
 	output = convForward_4:forward(inputTable4)
-	
-	print('output of CONVOLUTION forward, ')
-    if saveOutput and math.fmod(t , 50) == 1 and t > 1 then
-    	if wrapOpticalFlow then   
-            local optical_flow = convForward_4.modules[4].modules[2].modules[1].modules[1].modules[1].modules[3].modules[7].output
-    	    local imflow = flow2colour(optical_flow)
-            image.save(epochSaveDir..'flow-iter'..tostring(iter)..'.png', imflow)
-        end
 
-        if torch.isTensor(output) then
-            image.save(epochSaveDir..'output-iter'..tostring(iter)..'.png',  output)
-        else
-
-          	-- local net = nn.JoinTable(2)
-       	    --local concatOutput = net:forward(output)
-       	    for numsOfOut = 1, table.getn(output) do
-	    	    image.save(epochSaveDir..'output-iter'..tostring(iter)..'n'..tostring(numsOfOut)..'.png',  concatOutput)
-	    	end
-        end
-        print('image save')
-    end
-
-
-	criterion = nn.SequencerCriterion(nn.MSECriterion())
-	if gpuflag then criterion:cuda() end
-     
-    local targetSeq = torch.Tensor(opt.output_nSeq, opt.batchSize, opt.imageDepth, opt.imageH, opt.imageW):float()
-	
-	for i = 1, opt.output_nSeq do
-	  targetSeq[i] = data[{{}, {opt.input_nSeq + i}, {}, {}, {}}]:select(2,1):resizeAs(targetSeq[i])
-	end
-    
-    if gpuflag then targetSeq = targetSeq:cuda() end
-
-    print(output)
-    print(targetSeq)
+--   print(output)
+--   print(targetSeq)
 	local err = criterion:forward(output, targetSeq)
 	totalerror = err + totalerror
 	
@@ -830,7 +960,7 @@ for k = 1, 200 do -- max epoch = 299
 		print('test valid')
 		checkMemory()
 		testFlag = true
-		valid()
+	--	valid()
 
 	   	print('test model save, move to CPU')
 	   	checkMemory()
