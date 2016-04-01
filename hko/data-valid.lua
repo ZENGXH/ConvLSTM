@@ -1,26 +1,25 @@
 require 'image'
 local data_verbose = false
 
-function getdataSeq_mnist(data_path)
+function getdataSeq_valid(data_path)
    -- local data = torch.DiskFile(datafile,'r'):readObject()
- --  local data_path = 
+   --  local data_path = 
    -- data size (totalInstances or nsamples=2000?, sequence_length=20, 1, 64, 64)
    local datasetSeq ={}
    -- data = data:float()/255.0 -- to range(0, 1)
 
    --------------- configuration: -----------------
 --   local std = std or 0.2
-   local nsamples = 2037 * 4-- data:size(1)
+   local nsamples = 2037 -- data:size(1)
    local nseq  = 20 -- data:size(2)
    local nrows = 100 -- data:size(4)
    local ncols = nrows -- data:size(5)
    local nbatch = opt.batchSize
-   local ind = 1
    print (nsamples .. ' ' .. nseq .. ' ' .. nrows .. ' ' .. ncols)
 
    ------------- read the powerful txt file! ------
    local fileList = {}
-   f = io.open('/Users/zengxiaohui/project/ConvLSTM/helper/trainseq.txt', 'r')
+   f = io.open(data_path..'validseq.txt', 'r')
    local id = 1
    for line in f:lines() do
       fileList[id] = line
@@ -34,7 +33,6 @@ function getdataSeq_mnist(data_path)
 
    function datasetSeq:selectSeq()
       local imageok = false
-      print()
       if simdata_verbose then
          print('selectSeq')
       end
@@ -42,11 +40,8 @@ function getdataSeq_mnist(data_path)
       while not imageok do
          local input_batch = torch.Tensor(nbatch, nseq, 1, nrows, ncols)
  
-         for batch_ind = 1, nbatch do -- filling one batch one by one
-            local i = ind
-            ind = ind + 1
---           print('selecting ', i)
-            -- math.ceil(torch.uniform(1e-12, nsamples)) 
+         for batch_ind = 1, nbatch do
+            local i = math.ceil(torch.uniform(1e-12,nsamples)) 
             -- choose an index in range{1,.. nsamples}
             -- image index
             -- read the 20 frames starting from i
