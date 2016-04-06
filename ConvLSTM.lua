@@ -236,7 +236,7 @@ concat&multi:       |:select(3)              |
      {     {output}           ,          {callAct}}  }
                              ||  
    ]]-- 
-   print(model)
+  -- print(model)
    return model
 end
 
@@ -270,12 +270,18 @@ function ConvLSTM:updateOutput(input)
       local recurrentModule = self:getStepModule(self.step)
       -- print(recurrentModule)
       -- the actual forward propagation
-      output, cell = unpack(recurrentModule:updateOutput{input, prevOutput, prevCell})
+      if self.inputFlag then
+        output, cell = unpack(recurrentModule:updateOutput{input, prevOutput, prevCell})
+      else
+        output, cell = unpack(recurrentModule:updateOutput{prevOutput, prevCell})
+      end
    else
       output, cell = unpack(self.recurrentModule:updateOutput{input, prevOutput, prevCell})
    end
    
    self.outputs[self.step] = output
+  -- print("i am here! ")
+   --print(self.outputs)
    self.cells[self.step] = cell
    
    self.output = output
