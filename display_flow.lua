@@ -4,14 +4,34 @@ require 'image'
 --torch.setdefaulttensortype('torch.FloatTensor')
 
 function flow2colour(flow)    
+  -- flow(batchSize, depth == 2, h, w)
+  if flow:nDimension() == 3 then
+    local img = flow2colour3D(flow) 
+  else 
+    local numsOfBatch = flow:size(1)
+    local img = torch.Tensor(3, flow:size(3), flow:size(4), numsOfBatch)  -- 3 == colorwheel:size(2)
+    for n = 1, numsOfBatch do
+        local subflow = flow:select(1, n)
+        local subimg = img:select(4, n) 
+        subimg = flow2colour3D(subflow)
+    end
+    img:resize(3, flow:size(3), flow:size(4) * numsOfBatch)
+  end
+  img = img:float()
+  return img
+end
+
+function flow2colour3D(flow)    
+  -- print(flow)
+  assert(flow:nDimension() == 3)
   nBands = flow:size(1)
   height = flow:size(2)
   width  = flow:size(3) 
 
   assert(nBands == 2)    
 
-  u = flow[{{1},{},{}}]:double():squeeze()
-  v = flow[{{2},{},{}}]:double():squeeze()
+  u = flow[{{1},{},{}}]:float():clone():squeeze()
+  v = flow[{{2},{},{}}]:float():clone():squeeze()
   
   --print (#u)
   --print (#v)
@@ -22,13 +42,13 @@ function flow2colour(flow)
   maxv = v:max()
   minv = v:min()
 
-  rad = torch.sqrt(torch.pow(u,2)+torch.pow(v,2)) 
+  rad = torch.sqrt(torch.pow(u, 2) + torch.pow(v, 2)) 
   maxrad = rad:max()
 
   --print('max flow: %.4f flow range: u = %.3f .. %.3f; v = %.3f .. %.3f\n', maxrad, minu, maxu, minv, maxv)
   eps = 1e-6
-  u = u/(maxrad+eps);
-  v = v/(maxrad+eps);
+  u = u / (maxrad + eps);
+  v = v / (maxrad + eps);
 
   -- compute color
 
@@ -43,14 +63,14 @@ function displayFlowTest()
   width     = 151
   rg = truerange * 1.04
 
-  s2 = torch.round(height/2)
+  s2 = torch.round(height / 2)
 
-  x,y = meshgrid(width,height)
+  x,y = meshgrid(width, height)
 
-  u = x*rg/s2 - rg
-  v = y*rg/s2 - rg
+  u = x * rg / s2 - rg
+  v = y * rg / s2 - rg
 
-  img = computeColor(u/truerange, v/truerange)
+  img = computeColor(u / truerange, v / truerange)
 
   img[{{},{s2},{}}]:fill(0)
   img[{{},{},{s2}}]:fill(0)
@@ -63,23 +83,23 @@ function computeColor(u,v)
   --print (colorwheel)
   ncols = colorwheel:size(1)
 
-  rad = torch.sqrt(torch.pow(u,2)+torch.pow(v,2))  
-  a = torch.Tensor()
+  rad = torch.sqrt(torch.pow(u,2) + torch.pow(v,2))  
+  a = torch.Tensor():typeAs(u)
   a:resizeAs(u)
-  for i=1,u:size(1) do
-    for j=1,u:size(2) do       
-      a[i][j] = math.atan2(-v[i][j],-u[i][j])/math.pi
+  for i = 1, u:size(1) do
+    for j = 1, u:size(2) do       
+      a[i][j] = math.atan2(-v[i][j], -u[i][j]) / math.pi
     end
   end
 
-  fk = (a+1) /2 * (ncols-1) + 1
+  fk = (a + 1) / 2 * (ncols - 1) + 1
    
   k0 = torch.floor(fk)
 
-  k1 = k0+1
-  for i=1,k1:size(1) do
-    for j=1,k1:size(2) do
-      if k1[i][j] == ncols+1 then
+  k1 = k0 + 1
+  for i = 1, k1:size(1) do
+    for j = 1, k1:size(2) do
+      if k1[i][j] == ncols + 1 then
         k1[i][j] = 1
       end
     end
@@ -87,7 +107,7 @@ function computeColor(u,v)
 
   f = fk - k0
   ch = colorwheel:size(2)
-  img = torch.Tensor(ch,u:size(1),u:size(2))
+  img = torch.Tensor(ch, u:size(1), u:size(2))
 
   for i = 1,colorwheel:size(2) do
     tmp = colorwheel[{{},{i}}]--:clone()
@@ -99,10 +119,10 @@ function computeColor(u,v)
     for i1=1,col0:size(1) do
       for i2 = 1,col0:size(2) do 
         --if k0[i1][i2]>0 then 
-          col0[i1][i2] = tmp[k0[i1][i2]]/255
+          col0[i1][i2] = tmp[k0[i1][i2]] / 255
         --end
         --if k1[i1][i2]>0 then 
-          col1[i1][i2] = tmp[k1[i1][i2]]/255
+          col1[i1][i2] = tmp[k1[i1][i2]] / 255
         --end
       end
     end
@@ -115,17 +135,17 @@ function computeColor(u,v)
    
     idx = torch.Tensor()
     idx:resizeAs(rad)
-    for i1=1,idx:size(1) do
+    for i1 = 1,idx:size(1) do
       for i2 = 1,idx:size(2) do 
         if rad[i1][i2] <= 1 then
-          col[i1][i2] = 1-rad[i1][i2]*(1-col[i1][i2])
+          col[i1][i2] = 1 - rad[i1][i2] * (1 - col[i1][i2])
         else 
-          col[i1][i2] = col[i1][i2]*0.75
+          col[i1][i2] = col[i1][i2] * 0.75
         end
       end
     end
     
-    img[{{i},{},{}}]=torch.floor(col*255):clone()       
+    img[{{i},{},{}}] = torch.floor(col * 255):clone()       
   end
   return img
 end   

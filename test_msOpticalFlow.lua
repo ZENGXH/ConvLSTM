@@ -1,8 +1,8 @@
 -- warp with optical flow
 unpack = unpack or table.unpack
-onMac = false
+onMac = true
 saveOutput = true
-resumeFlag = true
+resumeFlag = false
 resumeIter = 1
 
 if onMac then
@@ -26,12 +26,13 @@ print(imageDir)
 
 local c = require 'trepl.colorize'
 
-require 'modelSave'
+require 'torch_extra/modelSave'
+
 require 'nn'
 require 'torch'
 
 
-local saveInterval = 200
+local saveInterval = 10
 
 if not onMac then
 	require 'cunn'
@@ -66,8 +67,9 @@ require 'rnn'
 require 'ConvLSTM_NoInput'
 dofile('./hko/opts-hko.lua')    
 dofile('./hko/data-hko.lua')
-dofile('./hko/data-valid.lua')
-require 'flow'
+if not onMac then
+	require 'flow'
+end
 print(opt)
 
 local paraInit = 0.01
@@ -91,18 +93,19 @@ end
 
 function saveImage(figure, name, iter, epochSaveDir, type)
 	if torch.isTensor(figure) then
-		local img = figure:clone():float():resize(1, 100, 100)
-	    image.save(epochSaveDir..'iter-'..tostring(iter)..'-'..name..'-.png',  img)
+		local img = figure:clone():float():resize(opt.imageDepth, opt.imageH, opt.imageW)
+	    image.save(epochSaveDir..'iter-'..tostring(iter)..'-'..name..'-.png',  img/img:max())
 	elseif type == 'output' then
     	for numsOfOut = 1, table.getn(figure) do
-   	    	local img = figure[numsOfOut]:clone():float():resize(1,100,100)
-    	    image.save(epochSaveDir..'iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img)
+   	    	local img = figure[numsOfOut]:clone():float():resize(opt.imageDepth, opt.imageH, opt.imageW)
+    	    image.save(epochSaveDir..'iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img/img:max())
     	end 
 	elseif type == 'gard' then
 		for numsOfOut = 1, table.getn(figure) do
-   	    	local img = figure[numsOfOut]:clone():float():resize(1, opt.nFiltersMemory[2] * 100, 100)
+   	    	local img = figure[numsOfOut]:clone():float():resize(opt.imageDepth, opt.nFiltersMemory[2] * opt.imageH, opt.imageW)
    	    	img = img:mul(1/img:max())
-    	    image.save(epochSaveDir..'iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img)
+
+    	    image.save(epochSaveDir..'iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img/img:max())
     	end  
 	end
 end
@@ -114,8 +117,8 @@ else
 	data_path = '../ConvLSTM/helper/'	
 end
 
-datasetSeq= getdataSeq_mnist(data_path)
-darasetSeq_valid = getdataSeq_valid(data_path)
+datasetSeq= getdataSeq_hko('train', data_path)
+darasetSeq_valid = getdataSeq_hko('valid', data_path)
 print  ('Loaded ' .. datasetSeq:size() .. ' images')
 
 print('==> training model')
@@ -223,7 +226,7 @@ else
 
 	]]
 	local interface = nn.ConcatTable()
-	reshape = nn.View(opt.nFiltersMemory[1], 100, 100)
+	reshape = nn.View(opt.nFiltersMemory[1], opt.imageH, opt.imageW)
 
 	for i = 1, opt.output_nSeq do
 	    local s1 = nn.SelectTable(i)
@@ -238,10 +241,11 @@ else
 	                               :add(nn.SpatialConvolution(opt.nFiltersMemory[2] * 2, opt.nFiltersMemory[1], 3, 3, 1, 1, 1, 1))
 							       :add(nn.View(opt.imageDepth, opt.imageH, opt.imageW))
 							       :add(nn.Transpose({1,3}, {1,2})):float()
-
-	local memory_branch = nn.Sequential():add(nn.SpatialConvolution(opt.nFiltersMemory[2] * 2, opt.nFiltersMemory[1], 3, 3, 1, 1, 1, 1))
+	if wrapOpticalFlow then						       
+		local memory_branch = nn.Sequential():add(nn.SpatialConvolution(opt.nFiltersMemory[2] * 2, opt.nFiltersMemory[1], 3, 3, 1, 1, 1, 1))
 	                                    :add(reshape)
 	                                    :add(flow):float() 
+    end
 	--branch_up:add(nn.JoinTable(1)) -- along width direction
 	--memory_branch:add(nn.JoinTable(1)) -- along width direction
 	if not wrapOpticalFlow then
@@ -453,6 +457,8 @@ if torch.isTensor(output) then
     	    local imflow = flow2colour(optical_flow)
             saveImage(imflow, 'flow', iter, epochSaveDir)
         end
+
+        saveImage(inputTable, 'inputTable', iter, epochSaveDir, 'output')
 
         saveImage(output, 'output', iter, epochSaveDir, 'output')
         saveImage(output2, 'output2', iter, epochSaveDir, 'output')
@@ -843,7 +849,7 @@ end
 --- =============================
 --- ==============================
 
-for k = 1, 200 do -- max epoch = 299
+for k = 2, 200 do -- max epoch = 299
 
 	if gpuflag then 
 		checkMemory()
