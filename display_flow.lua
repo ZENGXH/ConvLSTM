@@ -3,8 +3,10 @@ require 'image'
 
 --torch.setdefaulttensortype('torch.FloatTensor')
 
-function flow2colour(flow)    
+function flow2colour(flow_in)    
   -- flow(batchSize, depth == 2, h, w)
+  local flow = flow_in:clone()
+  flow = flow:float()
   if flow:nDimension() == 3 then
     local img = flow2colour3D(flow) 
   else 
@@ -29,10 +31,13 @@ function flow2colour3D(flow)
   width  = flow:size(3) 
 
   assert(nBands == 2)    
-
-  u = flow[{{1},{},{}}]:float():clone():squeeze()
-  v = flow[{{2},{},{}}]:float():clone():squeeze()
-  
+  if not opt.gpuflag then
+    u = flow[{{1},{},{}}]:float():clone():squeeze()
+    v = flow[{{2},{},{}}]:float():clone():squeeze()
+  else
+    u = flow[{{1},{},{}}]:double():clone():squeeze()
+    v = flow[{{2},{},{}}]:double():clone():squeeze()    
+  end
   --print (#u)
   --print (#v)
 
@@ -83,7 +88,7 @@ function computeColor(u,v)
   --print (colorwheel)
   ncols = colorwheel:size(1)
 
-  rad = torch.sqrt(torch.pow(u,2) + torch.pow(v,2))  
+  rad = torch.sqrt(torch.pow(u,2) + torch.pow(v,2)):typeAs(u)
   a = torch.Tensor():typeAs(u)
   a:resizeAs(u)
   for i = 1, u:size(1) do
@@ -111,9 +116,9 @@ function computeColor(u,v)
 
   for i = 1,colorwheel:size(2) do
     tmp = colorwheel[{{},{i}}]--:clone()
-    local col0 = torch.Tensor()
+    local col0 = torch.Tensor():typeAs(u)
     col0:resizeAs(u):zero()
-    local col1 = torch.Tensor()
+    local col1 = torch.Tensor():typeAs(u)
     col1:resizeAs(u):zero()
     
     for i1=1,col0:size(1) do
@@ -133,7 +138,7 @@ function computeColor(u,v)
     tmm2 = f2:cmul(col1)
     col = tmm1:add(tmm2)   
    
-    idx = torch.Tensor()
+    idx = torch.Tensor():typeAs(rad)
     idx:resizeAs(rad)
     for i1 = 1,idx:size(1) do
       for i2 = 1,idx:size(2) do 

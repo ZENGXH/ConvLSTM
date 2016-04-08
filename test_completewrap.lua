@@ -1,5 +1,8 @@
 -- warp with optical flow
-
+print('info: use mask to perform subsampling, 4 as the depth of the input image, 
+	but it become confuse with the batch Size, since when perfoming the BilinearSamplerBHWD, it is 
+	require that the depth of the inputImage is 1. decide to the maxpooling or other way of subsampling to 
+	accelate the training, increase the batchSize, see test_subsample for further infomation')
 unpack = unpack or table.unpack
 onMac = true
 saveOutput = true

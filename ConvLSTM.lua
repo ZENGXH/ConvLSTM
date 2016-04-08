@@ -5,6 +5,8 @@
   rho - recurrent sequence length
   kc  - convolutional filter size to convolve input
   km  - convolutional filter size to convolve cell; usually km > kc  
+  change from no bias to have bias so that the model can be transform 
+  to CPU for further evaluation
 --]]
 local _ = require 'moses'
 require 'nn'
@@ -21,16 +23,18 @@ local ConvLSTM, parent = torch.class('nn.ConvLSTM', 'nn.LSTM')
               true, 3,-- with cell to gate, kernel size 3
               false)  -- no input for LSTM
 ]]--
+
+-- validation of number of parameters for LSTM: 9 CONVOLUTION
 function ConvLSTM:__init(inputSize, outputSize, rho, kc, km, stride, batchSize, cell2gate, ka, inputFlag)
    print("intputsize", inputSize)
    self.kc = kc or 3
-   self.km = km or 3
+   self.km = km or km
    self.padc = torch.floor(kc/2) 
    self.padm = torch.floor(km/2)
    self.stride = stride or 1
-   self.batchSize =  batchSize or nil
+   self.batchSize =  batchSize or 1
    self.cell2gate = true
-   self.ka = ka or 3
+   self.ka = ka or km
    -- for decoder1, ie layer 2: no input 
    self.inputFlag = true
 
@@ -54,11 +58,14 @@ function ConvLSTM:buildGate()
 --        print(" setup LSTM with no input to inputs !! ")
 --    end 
 
-   local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
+--   local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
+   local output2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
 
 --  if(self.cell2gate) then
  --   print("right")
-   local cell2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
+   -- local cell2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
+
+   local cell2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
 --   end
 --- para 3 sub gates ---
    local para = nn.ParallelTable()
@@ -102,7 +109,9 @@ function ConvLSTM:buildcellGate()
    hidden:add(nn.NarrowTable(1,2))
 
    local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
-   local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
+   local output2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
+
+   -- local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
    --local output2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
    local para = nn.ParallelTable()
    para:add(input2gate):add(output2gate)
@@ -241,6 +250,7 @@ concat&multi:       |:select(3)              |
 end
 
 function ConvLSTM:updateOutput(input)
+
    local prevOutput, prevCell
    
    if self.step == 1 then
@@ -293,6 +303,8 @@ function ConvLSTM:updateOutput(input)
    self.accGradParametersStep = nil
    self.gradParametersAccumulated = false
    -- note that we don't return the cell, just the output
+
+
    return self.output
 end
 

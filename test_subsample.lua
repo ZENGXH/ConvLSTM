@@ -16,8 +16,8 @@ local saveInterval = 10
 local learningRate = 1e-4
 
 require 'paths'
-local modelDir = 'image/completeWrap_subsample/'
-local imageDir = 'image/completeWrap_subsample/'
+modelDir = 'image/completeWrap_subsample/'
+imageDir = 'image/completeWrap_subsample/'
 if not paths.dirp(modelDir) then os.execute('mkdir -p ' .. modelDir) end
 if not paths.dirp(imageDir) then os.execute('mkdir -p ' .. imageDir) end
 print('image dir: ',imageDir)
@@ -43,7 +43,7 @@ require 'stn'
 require 'torch_extra/imageScale'
 dofile 'torch_extra/dataProvider.lua'
 dofile 'flow.lua'
-
+dofile 'torch_extra/SelfFeedSequencer.lua'
 
 if not onMac then
 	require 'cunn'
@@ -62,10 +62,14 @@ if not onMac then
 end
 
 print(opt)
-torch.setdefaulttensortype('torch.FloatTensor')
-typeT = torch.Tensor():float()
-print("setdefaulttensortype: ", dummyCPUTypeTensor)
-
+if not opt.gpuflag then
+	torch.setdefaulttensortype('torch.FloatTensor')
+	typeT = torch.Tensor():float()
+	print("setdefaulttensortype: ", typeT)
+else
+	typeT = torch.Tensor():cuda()
+	print("setdefaulttensortype: ", typeT)
+end
 local std = opt.parametersInitStd 
 
 
@@ -82,7 +86,6 @@ function saveImage(figure_in, name, iter, epochSaveDir, type, numsOfOut)
 	local numsOfOut = numsOfOut or 0
 	local figure = torch.Tensor()
 	if torch.isTensor(figure_in)  then 
-
     	local img = figure_in:clone():typeAs(typeT)
     	img = img:mul(1/img:max()):squeeze()
 	    image.save(epochSaveDir..'iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img)
@@ -99,23 +102,6 @@ function saveImage(figure_in, name, iter, epochSaveDir, type, numsOfOut)
     		saveImage(img, name, iter, epochSaveDir, type, numsOfOut)
     	end   	
 	end
-end
-
-
-function quicksaveImage(figure_in, name, iter, epochSaveDir, type, numsOfOut)
-	local numsOfOut = numsOfOut or 0
-	if type == 'output' then
-    	local img = figure_in:clone():typeAs(typeT)
-    	-- img = img:mul(1/img:max())
-	    image.save(epochSaveDir..'quick-iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img)
-	elseif type == 'grad' then
-    	local img = figure_in:clone():typeAs(typeT)
-    	-- img = img:mul(1/img:max())
-	    image.save(epochSaveDir..'quick-iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img/img:max())
-	elseif type == 'flow' then
-		local img = figure_in:clone():typeAs(typeT)
-	    image.save(epochSaveDir..'quick-iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img/img:max())
-	end	 
 end
 
 if not onMac then
@@ -143,30 +129,37 @@ local epoch = 0
 
 if gpuflag then print('gpu flag on') else print('gpu flag off') end
 
-local iter = 0
+iter = 0
+
+scaleDown = nn.imageScale(opt.inputSizeH, opt.inputSizeW, 'bicubic')
+scaleUp = nn.imageScale(opt.imageH, opt.imageW, 'bicubic')-- :typeAs(typeT)
+if(gpuflag) then
+	scaleUp:cuda()
+	scaleDown:cuda()
+end
 
 if resumeFlag then
 	print('==> load model, resume traning')
-  	encoder_0 = torch.load(modelDir..'test_encoder_0iter-'..resumeIter..'.bin')
-  	repeatModel = torch.load(modelDir..'test_repeatModeliter-'..resumeIter..'.bin')
+  	encoder_0 = torch.load(modelDir..'encoder_0iter-'..resumeIter..'.bin')
+  	repeatModel = torch.load(modelDir..'repeatModeliter-'..resumeIter..'.bin')
+  	flowGridGenerator = repeatModel.modules[1].modules[1].modules[1].modules[1].modules[2].modules[2].modules[1]
+  	print(repeatModel)
   	print('load model done')
+ 	local lstm_params4, lstm_grads4 = repeatModel:getParameters()
+	-- lstm_params4:normal(opt.paraInit, std)
+	local lstm_params0, lstm_grads0 = encoder_0:getParameters()
+	print('number of parameters of repeatModel', lstm_params4:size(1) + lstm_params0:size(1))
+	-- 91552
 else
 
 	print('==> build model for traning')
 --------------------------------------  building model -----------------------------
-	scaleDown = nn.imageScale(opt.inputSizeH, opt.inputSizeW, 'bicubic')
-	scaleUp = nn.imageScale(opt.imageH, opt.imageW, 'bicubic')-- :typeAs(typeT)
-	if(gpuflag) then
-		scaleUp:cuda()
-		scaleDown:cuda()
-	end
+
 
 	local baseLSTM = nn.ConvLSTM(opt.nFiltersMemory[1], opt.nFiltersMemory[2],  -- 5, 15?
 	                 		opt.input_nSeq - 1, opt.kernelSize,
 	                        opt.kernelSizeMemory, opt.stride, opt.batchSize, true, 3):float()
-	encoder_0 = nn.Sequencer(nn.Sequential()
-									-- :add(nn.SpatialConvolution(1, opt.nFiltersMemory[1], 3, 3, 1, 1, 1, 1))
-									:add(baseLSTM)):float()-- batchsize
+	encoder_0 = nn.Sequencer(baseLSTM):float()-- batchsize
 
 	local lstm_params0, lstm_grads0 = encoder_0:getParameters()
 	lstm_params0:uniform(-0.08, 0.08)
@@ -182,10 +175,8 @@ else
 							       --:add(nn.Transpose({1,4})) -- make fake Depth batchSIZE
 							       -- output 4 50 50 1
 
-	flowGridGenerator = nn.Sequential()
-									-- :add(nn.SpatialConvolution(opt.nFiltersMemory[2], opt.nFiltersMemory[1], 3, 3, 1, 1, 1, 1))
-	    							:add(flow) 
-	 print(flowGridGenerator)   					
+	flowGridGenerator = nn.Sequential():add(flow) 
+	print(flowGridGenerator)   					
 		    						-- B1 D4 H50 W50 => B4 D1 H50 W50
 		-- for input of flow: B4 D1 H50 W50, 
 		-- depth of first conv should be opt.batchSize -> others
@@ -222,7 +213,7 @@ else
 						:add(outerConcat)
 						:add(nn.CAddTable())
 						:add(nn.Clamp(0.00,1.00)):float()
-    repeatModel = nn.Repeater(mainBranch, opt.output_nSeq):float()
+    repeatModel = nn.SelfFeedSequencer(mainBranch):float()
 	local lstm_params4, lstm_grads4 = repeatModel:getParameters()
 	lstm_params4:normal(opt.paraInit, std)
 
@@ -264,56 +255,85 @@ function train()
 	local epochSaveDir = imageDir..'train-epoch'..tostring(epoch)..'/'
  	if not paths.dirp(epochSaveDir) then os.execute('mkdir -p ' .. epochSaveDir) end
   
-	encoder_0:remember('eval')
-	encoder_0:evaluate()
+	--encoder_0:remember('eval')
+	--encoder_0:evaluate()
+	encoder_0:remember('both')
+	encoder_0:training()
 
 	repeatModel:remember('both') 
 	repeatModel:training()
-
+	local accErr = 0
 	for t =1, opt.trainIter do
 	    print(c.blue '==>'.." online epoch # " .. epoch .. ' [batchSize = ' .. opt.batchSize .. ']')
 	    local tic = torch.tic()
 
 	    local iter = t
 	    local trainData = trainDataProvider[t]
+
 	    encoder_0:zeroGradParameters()
 	    encoder_0:forget()
 
 	    repeatModel:zeroGradParameters()
 	    repeatModel:forget()
-	    assert(baseLSTMCopy.step == 1)
-
 	    local inputTable = trainData[1]
-
+	    -- assert(baseLSTMCopy.step == 1)
+	    --------------************--------------------------------------hard code input-----------
+	    
 		-- rescale for training
-	    -- print('before scaling: ', inputTable)
+	    --print('before scaling: ', inputTable)
 	    inputTable = scaleDown:forward(inputTable)
+	    local encoderInput = {}
 
-	    -- print('after scaling: ', inputTable)
+	    if opt.gpuflag then 
+	    	for i = 1, table.getn(inputTable) - 1 do
+	    		encoderInput[i] = inputTable[i]:cuda()
+	    	end
+	    	encoder_0:cuda()
+	    else 
+	    	for i = 1, table.getn(inputTable) - 1 do
+	    		encoderInput[i] = inputTable[i]
+	    	end
+	    end
+	    -- print('inputTable', inputTable)
+	    -- print('encoder_0 input', encoderInput)
 
-		local output0 = encoder_0:updateOutput(inputTable)
-		
-	    local inputTable4 = inputTable[opt.input_nSeq]
+	    local inputTable4 = {}
+	    
+	    if opt.gpuflag then inputTable4[1] = inputTable[opt.input_nSeq]:cuda()
+	    else inputTable4[1] = inputTable[opt.input_nSeq]
+	    end
 	    inputTable = {}
+	    if opt.gpuflag then
+		    for i = 1, opt.output_nSeq - 1 do -- fill in dummpy input
+			    inputTable4[i + 1] = torch.Tensor():cuda():resizeAs(inputTable4[1]):fill(0)
+			end
+		else
+		    for i = 1, opt.output_nSeq - 1 do -- fill in dummpy input
+			    inputTable4[i + 1] = torch.Tensor():resizeAs(inputTable4[1]):fill(0)
+			end
+		end
+		--------------************-------------------------------------------------
+		local output0 = encoder_0:forward(encoderInput)
+		-- print('encoder_0 output', output0)
 	    -- print('output of encoder_0: ', output0)
 		output = repeatModel:forward(inputTable4)
-
+--		print("========================")	
 	    if saveOutput and math.fmod(t , saveInterval) == 1 and t > 1 then
 	    	if wrapOpticalFlow then  
 	    		local optical_flow = flowGridGenerator.modules[1].modules[5].output -- 4 2 50 50
-	 			--  print('optical flow is 4 * nDimension', optical_flow[1]:nDimension())
-	    		-- same image of the first batch
-	    		    -- print(table.getn(optical_flow))
-	    			local flow_batch1 = optical_flow[1]
-	 		   	    local imflow = flow2colour(flow_batch1)
-	            	saveImage(imflow, 'flow', iter, epochSaveDir, 'flow', i)		       
+    			local flow_batch1 = optical_flow[1]
+ 		   	    local imflow = flow2colour(flow_batch1)
+            	saveImage(imflow, 'flow', iter, epochSaveDir, 'flow', i)		       
 	        end
+	        local lastinput = repeatModel.modules[1].modules[1].modules[1].modules[1].modules[1].output
+	        -- print(lastinput:size())
+	        saveImage(lastinput[1]:select(3,1), 'lastinput', iter, epochSaveDir, 'output', i)	
 	       -- saveImage(output0, 'output0', iter, epochSaveDir, 'output')
 	    end
 
 		--criterion = nn.MSECriterion():typeAs(typeT)
-		local criterion = nn.SequencerCriterion(nn.MSECriterion())
-		if gpuflag then criterion:cuda() end
+		local criterion = nn.SequencerCriterion(nn.MSECriterion(1))
+		if opt.gpuflag then criterion:cuda() end
 	     
 		local target = trainData[2]
 	    -- local targetSeq = torch.Tensor(opt.output_nSeq, opt.batchSize, opt.fakeDepth, opt.inputSizeH, opt.inputSizeW):typeAs(typeT)
@@ -328,28 +348,67 @@ function train()
 	    	saveImage(target, 'target', iter, epochSaveDir, 'output')
 	    	-- { Tensor(batch * depth * h * w), Tensor(batch * depth * h * w), Tensor(batch * depth * h * w), }
 		end
+--lstm = repeatModel.modules[1].modules[1].modules[1].modules[1].modules[2].modules[1].modules[1]
+-- flow = repeatModel.modules[1].modules[1].modules[1].modules[1].modules[2].modules[2].modules[1]
 
 		target = scaleDown:forward(target)
+	    if opt.gpuflag then 
+	    	for i = 1, table.getn(target) do
+	    		target[i] = target[i]:cuda()
+	    	end
+	    end
 
 		err = criterion:forward(output, target)
-		
+		accErr = err + accErr
 		print("\titer",t, "err:", err)
+
 		if t < 10 then checkMemory('\ncriterion start bp <<<<') end
 
 		local gradOutput = criterion:backward(output, target)
 
+	    if saveOutput and math.fmod(t , saveInterval) == 1 or t == 1 then
+	    	saveImage(output, 'output', iter, epochSaveDir, 'output')
+	    	saveImage(target, 'target', iter, epochSaveDir, 'output')
+	    	-- { Tensor(batch * depth * h * w), Tensor(batch * depth * h * w), Tensor(batch * depth * h * w), }
+		end
 		if t < 10 then checkMemory('criterion backward done <<<<') end
+		--------------************-------------
+		for i = 1, #inputTable4 - 1 do
+			inputTable4[i] = output[i + 1]
+		end	
+		--------------************-------------
 	    target = {}
 		output = {}
 		--print(gradOutput)
 		--checkMemory()
 	-------------------------------
-		
+	    --local a, b = flowGridGenerator:getParameters()
+	    --print('para mean of flowGridGenerator', a:mean())
+	    --print('gradpara mean of flowGridGenerator', b:mean())		
 		if t < 10 then checkMemory('\nconv_4 bp <<<<') end
 
-	    repeatModel:backwardUpdate(inputTable4, gradOutput, learningRate)
+		-- lstm_param1, lstm_grad1 = baseLSTMCopy:getParameters()
+		-- gradOutput[1] = gradOutput[1]:mul(1000)
+		-- gradOutput[2] = gradOutput[2]:mul(10)
+
+		repeatModel:backward(inputTable4, gradOutput)
+
+	    --repeatModel:backwardUpdate(inputTable4, gradOutput, learningRate)
+--      repeatModel:updateGradInput(inputTable4, gradOutput)  
+--		repeatModel:accGradParameters(inputTable4, gradOutput, 1)
+		-- conv0 = flowGridGenerator.modules[1].modules[1].modules[1].gradBias:fill(1)
+		-- print('bias', flowGridGenerator.modules[1].modules[1].modules[1].bias)
+--		print('mean', flowGridGenerator.modules[1].modules[1].modules[1].weight:mean())
+		repeatModel:updateParameters(learningRate)
+
+	    --print('gradoutput', gradOutput[1]:mean())
+	    --local a, b = lstm:getParameters()
+	    --print('para mean of flowGridGenerator', a:mean())
+	    --print('gradpara mean of flowGridGenerator', b:mean())
+
 	    repeatModel:zeroGradParameters()
 	    repeatModel.output = {}
+
 	--[[
 	    if saveOutput and math.fmod(t , saveInterval) == 1 and t > 1 then
 	    	for i = 1, 4 do
@@ -360,19 +419,26 @@ function train()
 		gradOutput = {}
 	]]
 		print('\nconv_4 bp done')  
-		--lstm_param, lstm_grad = baseLSTMCopy:getParameters()
+		-- lstm_param2, lstm_grad2 = baseLSTMCopy:getParameters()
 		--lstm_param2, lstm_grad = baseLSTM:getParameters()
-		--assert(lstm_param:eq(lstm_param2):max() == 0)
+		-- assert(lstm_param1:eq(lstm_param2):max() == 0)
 
 		inputTable =  {}
 		repeatModel:forget()
-
+		if math.fmod(t, 80)  == 1 then
+			print('accE rror of ', 80 * opt.batchSize, 'is >>>>>> ', accErr)
+			accErr = 0
+		end
 	--	print('encoder_0 bp done:')
 		if t < 10 then checkMemory("backward done") end
 		local toc = torch.toc(tic)
 		print('time used: ',toc)
 
 		if t < 10 then checkMemory() end
+		if opt.onMac and t == opt.trainIter / 2 then
+			saveModel(modelDir, encoder_0, 'encoder_0_middle', epoch)
+		   	saveModel(modelDir, repeatModel, 'repeatModel_middle', epoch)
+	    end
 	end
 
 	epoch = epoch + 1
@@ -388,8 +454,8 @@ function valid()
 	encoder_0:remember('eval')
 	encoder_0:evaluate()
 
-	repeatModel:remember('eval') 
-	repeatModel:evaluate()
+	repeatModel:remember('both') 
+	repeatModel:training()
 	print(c.blue '==>'..'validating')
 	local t = 0
 
@@ -414,11 +480,45 @@ function valid()
 	    repeatModel:forget()
 
 	    local inputTable = validData[1]
-	    inputTable = scaleDown:forward(inputTable)
-	    -- print(inputTable)
-		local output0 = encoder_0:updateOutput(inputTable)
+	    --------------************--------------------------------------hard code input-----------
 	    
-	    local inputTable4 = inputTable[opt.input_nSeq]
+		-- rescale for training
+	    --print('before scaling: ', inputTable)
+	    inputTable = scaleDown:forward(inputTable)
+	    local encoderInput = {}
+
+	    if opt.gpuflag then 
+	    	for i = 1, table.getn(inputTable) - 1 do
+	    		encoderInput[i] = inputTable[i]:cuda()
+	    	end
+	    	encoder_0:cuda()
+	    else 
+	    	for i = 1, table.getn(inputTable) - 1 do
+	    		encoderInput[i] = inputTable[i]
+	    	end
+	    end
+	    -- print('inputTable', inputTable)
+	    -- print('encoder_0 input', encoderInput)
+
+	    local inputTable4 = {}
+	    
+	    if opt.gpuflag then inputTable4[1] = inputTable[opt.input_nSeq]:cuda()
+	    else inputTable4[1] = inputTable[opt.input_nSeq]
+	    end
+	    inputTable = {}
+	    if opt.gpuflag then
+		    for i = 1, opt.output_nSeq - 1 do -- fill in dummpy input
+			    inputTable4[i + 1] = torch.Tensor():cuda():resizeAs(inputTable4[1]):fill(0)
+			end
+		else
+		    for i = 1, opt.output_nSeq - 1 do -- fill in dummpy input
+			    inputTable4[i + 1] = torch.Tensor():resizeAs(inputTable4[1]):fill(0)
+			end
+		end
+
+		--------------************-------------------------------------------------
+		local output0 = encoder_0:forward(inputTable)
+	    
 		output = repeatModel:forward(inputTable4)
 
 		local criterion = nn.SequencerCriterion(nn.MSECriterion())
@@ -427,6 +527,13 @@ function valid()
 	     
 		local target = validData[2]
 		target = scaleDown:forward(target)
+
+	    if opt.gpuflag then 
+	    	for i = 1, table.getn(target) do
+	    		target[i] = target[i]:cuda()
+	    	end
+	    end
+
 		local err = criterion:forward(output, target)
 		target = {}
 		output = {}
@@ -450,7 +557,7 @@ for k = 1, opt.maxEpoch do -- max epoch = 299
 	end
 
 
-	if gpuflag then 
+	if opt.gpuflag then 
 		checkMemory('before move to GPU')
         encoder_0:cuda()
 		repeatModel:cuda() 
@@ -458,7 +565,7 @@ for k = 1, opt.maxEpoch do -- max epoch = 299
 	end 
 		print('test optical flow')
 	   	local optical_flow = flowGridGenerator.modules[1].modules[5].output -- 4 2 50 50
-		
+		testFlag = false
 	if k == 1 then 
 		
     	if wrapOpticalFlow then   
@@ -483,8 +590,8 @@ for k = 1, opt.maxEpoch do -- max epoch = 299
 	   	print('test model save, move to CPU')
 	   	checkMemory("")
 	--        torch.save(opt.dir .. '/model_' .. t .. '.bin', model)
-        encoder_0:typeAs(typeT)
-		repeatModel:typeAs(typeT) 
+        encoder_0:float()
+		repeatModel:float()
 
 		checkMemory()
 	   	saveModel(modelDir, encoder_0, 'test_encoder_0', k)
@@ -504,10 +611,10 @@ for k = 1, opt.maxEpoch do -- max epoch = 299
 		valid()
 
 	if gpuflag then 
-		encoder_0:typeAs(typeT) 
-		repeatModel:typeAs(typeT) 
-		if math.fmod(k , 5) == 1 then
-	        saveModel(modelDir,encoder_0, 'encoder_0', k)
+		encoder_0:float()
+		repeatModel:float()
+		if math.fmod(k , 1) == 1 then
+	        saveModel(modelDir, encoder_0, 'encoder_0', k)
 		   	saveModel(modelDir, repeatModel, 'repeatModel', k)
 	    end
 	   	print('modelSave')
