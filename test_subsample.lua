@@ -12,12 +12,12 @@ resumeIter = 1
 verbose = true
 display = false
 
-local saveInterval = 10
-local learningRate = 1e-4
+local saveInterval = 5
+local learningRate = opt.lr * 10 
 
 require 'paths'
-modelDir = 'image/completeWrap_subsample/'
-imageDir = 'image/completeWrap_subsample/'
+modelDir = 'image/testout/'
+imageDir = 'image/testout/'
 if not paths.dirp(modelDir) then os.execute('mkdir -p ' .. modelDir) end
 if not paths.dirp(imageDir) then os.execute('mkdir -p ' .. imageDir) end
 print('image dir: ',imageDir)
@@ -88,6 +88,12 @@ function saveImage(figure_in, name, iter, epochSaveDir, type, numsOfOut)
 	if torch.isTensor(figure_in)  then 
     	local img = figure_in:clone():typeAs(typeT)
     	img = img:mul(1/img:max()):squeeze()
+--   	if name == 'flow' then
+--    		  print('1: mean flow: %.4f flow range: u = %.3f .. %.3f', img[1]:mean(), img[1]:min(), img[1]:max())
+--    		  print('2: mean flow: %.4f flow range: u = %.3f .. %.3f', img[2]:mean(), img[2]:min(), img[2]:max())
+--    		  print('3: mean flow: %.4f flow range: u = %.3f .. %.3f', img[3]:mean(), img[3]:min(), img[3]:max())
+--		end
+    	-- img = img:mul(1/img:max()):squeeze()
 	    image.save(epochSaveDir..'iter-'..tostring(iter)..'-'..name..'-n'..tostring(numsOfOut)..'.png',  img)
     elseif type == 'output' then------------- table --------------	
     	for numsOfOut = 1, table.getn(figure_in) do
@@ -212,7 +218,8 @@ else
 	local mainBranch = nn.Sequential()
 						:add(outerConcat)
 						:add(nn.CAddTable())
-						:add(nn.Clamp(0.00,1.00)):float()
+						:add(nn.Clamp(0.00,1.00))
+						:add(nn.SpatialConvolution(1, 1, 3, 3, 1, 1, 1, 1)):float()
     repeatModel = nn.SelfFeedSequencer(mainBranch):float()
 	local lstm_params4, lstm_grads4 = repeatModel:getParameters()
 	lstm_params4:normal(opt.paraInit, std)
@@ -382,9 +389,7 @@ function train()
 		--print(gradOutput)
 		--checkMemory()
 	-------------------------------
-	    --local a, b = flowGridGenerator:getParameters()
-	    --print('para mean of flowGridGenerator', a:mean())
-	    --print('gradpara mean of flowGridGenerator', b:mean())		
+	
 		if t < 10 then checkMemory('\nconv_4 bp <<<<') end
 
 		-- lstm_param1, lstm_grad1 = baseLSTMCopy:getParameters()
@@ -392,7 +397,10 @@ function train()
 		-- gradOutput[2] = gradOutput[2]:mul(10)
 
 		repeatModel:backward(inputTable4, gradOutput)
-
+	    local a, b = flowGridGenerator:getParameters()
+	    b = b * 1000000
+	    --print('para mean of flowGridGenerator', a:mean())
+	    print('gradpara mean of flowGridGenerator', b:mean())	
 	    --repeatModel:backwardUpdate(inputTable4, gradOutput, learningRate)
 --      repeatModel:updateGradInput(inputTable4, gradOutput)  
 --		repeatModel:accGradParameters(inputTable4, gradOutput, 1)
