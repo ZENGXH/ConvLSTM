@@ -5,8 +5,6 @@
   rho - recurrent sequence length
   kc  - convolutional filter size to convolve input
   km  - convolutional filter size to convolve cell; usually km > kc  
-  change from no bias to have bias so that the model can be transform 
-  to CPU for further evaluation
 --]]
 local _ = require 'moses'
 require 'nn'
@@ -14,7 +12,7 @@ require 'dpnn'
 require 'rnn'
 -- require 'extracunn'
 
-local ConvLSTM, parent = torch.class('nn.ConvLSTM', 'nn.LSTM')
+local ConvLSTM_NoInput, parent = torch.class('nn.ConvLSTM_NoInput', 'nn.AbstractRecurrent')
 
 --[[to be copy(64, 64, -- inputSize and outputSize
               5,      -- length of seq
@@ -23,60 +21,73 @@ local ConvLSTM, parent = torch.class('nn.ConvLSTM', 'nn.LSTM')
               true, 3,-- with cell to gate, kernel size 3
               false)  -- no input for LSTM
 ]]--
-
--- validation of number of parameters for LSTM: 9 CONVOLUTION
-function ConvLSTM:__init(inputSize, outputSize, rho, kc, km, stride, batchSize, cell2gate, ka, inputFlag)
+function ConvLSTM_NoInput:__init(inputSize, outputSize, rho, kc, km, stride, batchSize, cell2gate, ka, inputFlag)
    print("intputsize", inputSize)
+
    self.kc = kc or 3
-   self.km = km or km
+   self.km = km or 3
    self.padc = torch.floor(kc/2) 
    self.padm = torch.floor(km/2)
    self.stride = stride or 1
-   self.batchSize =  batchSize or 1
+   self.batchSize =  batchSize or nil
    self.cell2gate = true
-   self.ka = ka or km
+   self.ka = ka or 3
    -- for decoder1, ie layer 2: no input 
-   self.inputFlag = true
+   self.inputFlag = false
 
-   parent.__init(self, inputSize, outputSize, rho or 5)
+   parent.__init(self, rho or 9999)
+   self.inputSize = inputSize
+   self.outputSize = outputSize or inputSize
+   -- build the model
+--   self.cell2gate = (cell2gate == nil) and true or cell2gate
+   self.recurrentModule = self:buildModel()
+   -- make it work with nn.Container
+   self.modules[1] = self.recurrentModule
+   self.sharedClones[1] = self.recurrentModule 
+   
+   -- for output(0), cell(0) and gradCell(T)
+   self.zeroTensor = torch.Tensor() 
+   
+   self.cells = {}
+   self.gradCells = {}
+
+
+ --  parent.__init(self, inputSize, outputSize, rho or 5)
 end
 
 -------------------------- factory methods -----------------------------
-function ConvLSTM:buildGate()
+function ConvLSTM_NoInput:buildGate()
    -- Note : Input is : {input(t), output(t-1), cell(t-1)}
 
    local gate = nn.Sequential()
-   if(not self.cell2gate) then
+--   if(not self.cell2gate) then
 --     gate:add(nn.NarrowTable(1,2)) -- we don't need cell here
-   end
+--   end
 --- sub gates -----------
    -- print(" setup LSTM ")
 --   if(self.inputFlag) then
 
-    local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
+--    local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
 --    else       
 --        print(" setup LSTM with no input to inputs !! ")
 --    end 
 
---   local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
    local output2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
 
 --  if(self.cell2gate) then
  --   print("right")
-   -- local cell2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
-
-   local cell2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
+   local cell2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.ka, self.ka, self.stride, self.stride, self.padm, self.padm)
 --   end
 --- para 3 sub gates ---
    local para = nn.ParallelTable()
  ---   para:add(input2gate):add(output2gate):add(cell2gate)
 
-  if(self.cell2gate) then
+  -- if(self.cell2gate) then
   --    para:add(nn.Identity()):add(nn.Identity()):add(nn.Identity())
-      para:add(input2gate):add(output2gate):add(cell2gate)
-   else
-       para:add(input2gate):add(output2gate) 
-   end
+      para:add(output2gate):add(cell2gate)
+  --  else
+  --      para:add(input2gate):add(output2gate) 
+  --  end
 --- add three sub gates and sigmoid ---------
 
    gate:add(para)
@@ -90,37 +101,33 @@ end
 
 
 
-function ConvLSTM:buildInputGate()
+function ConvLSTM_NoInput:buildInputGate()
    self.inputGate = self:buildGate()
    return self.inputGate
 end
 
-function ConvLSTM:buildForgetGate()
+function ConvLSTM_NoInput:buildForgetGate()
 
    self.forgetGate = self:buildGate()
   
    return self.forgetGate
 end
 
-function ConvLSTM:buildcellGate()
+function ConvLSTM_NoInput:buildcellGate()
    -- Input is : {input(t), output(t-1), cell(t-1)}, but we only need {input(t), output(t-1)}
    local hidden = nn.Sequential()
 
-   hidden:add(nn.NarrowTable(1,2))
-
-   local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
+   -- local input2gate = nn.SpatialConvolution(self.inputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
    local output2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
-
-   -- local output2gate = nn.SpatialConvolutionNoBias(self.outputSize, self.outputSize, self.km, self.km, self.stride, self.stride, self.padm, self.padm)
    --local output2gate = nn.SpatialConvolution(self.outputSize, self.outputSize, self.kc, self.kc, self.stride, self.stride, self.padc, self.padc)
-   local para = nn.ParallelTable()
-   para:add(input2gate):add(output2gate)
+   -- local para = nn.ParallelTable()
+   -- para:add(input2gate):add(output2gate)
+   hidden:add(nn.SelectTable(1)):add(output2gate):add(nn.Tanh())
 
+--   hidden:add(para)
+--   hidden:add(nn.CAddTable())
 
-   hidden:add(para)
-   hidden:add(nn.CAddTable())
-
-   hidden:add(nn.Tanh())
+   -- hidden:add(nn.Tanh())
 
    self.cellGate = hidden
    return hidden
@@ -129,7 +136,7 @@ end
 
 
 
-function ConvLSTM:buildcell()
+function ConvLSTM_NoInput:buildcell()
    -- Input is : {input(t), output(t-1), cell(t-1)}
    self.inputGate = self:buildInputGate() 
    self.forgetGate = self:buildForgetGate()
@@ -140,11 +147,11 @@ function ConvLSTM:buildcell()
    local forget = nn.Sequential()
    local concat = nn.ConcatTable()
 
-   if(inputFlag) then
-        concat:add(self.forgetGate):add(nn.SelectTable(3))
-   else
-        concat:add(self.forgetGate):add(nn.SelectTable(2))
-   end
+--   if(inputFlag) then
+    concat:add(self.forgetGate):add(nn.SelectTable(2))
+--   else
+--        concat:add(self.forgetGate):add(nn.SelectTable(2))
+--   end
 
    forget:add(concat) -- {forgetGate},{selet cell activetion by selectable}
    forget:add(nn.CMulTable()) -- output = forgetGate} * cellActivetion
@@ -156,6 +163,7 @@ function ConvLSTM:buildcell()
    concat2:add(self.inputGate):add(self.cellGate)
    input:add(concat2)
    input:add(nn.CMulTable())
+
    ---------------------------------
 
 
@@ -172,7 +180,7 @@ function ConvLSTM:buildcell()
 
 end   
    
-function ConvLSTM:buildOutputGate()
+function ConvLSTM_NoInput:buildOutputGate()
    self.outputGate = self:buildGate()
    return self.outputGate
 end
@@ -180,7 +188,7 @@ end
 -- cell(t) = cell{input, output(t-1), cell(t-1)}
 -- output(t) = outputGate{input, output(t-1)}*tanh(cell(t))
 -- output of Model is table : {output(t), cell(t)} 
-function ConvLSTM:buildModel()
+function ConvLSTM_NoInput:buildModel()
    -- Input is : {input(t), output(t-1), cell(t-1)}
    self.cell = self:buildcell()
    self.outputGate = self:buildOutputGate()
@@ -188,11 +196,11 @@ function ConvLSTM:buildModel()
    local model = nn.Sequential()
 
 
-       local concat = nn.ConcatTable()
-  if(self.inputFlag) then
-       concat:add(nn.NarrowTable(1,2)):add(self.cell)  -- select {input, output(t-1)}          -- cell gate {cell(t)}
-       model:add(concat)               -- {{input(t), output(t-1)}, cell(t)}, 
-   end
+   local concat = nn.ConcatTable()
+--  if(self.inputFlag) then
+    concat:add(nn.SelectTable(1)):add(self.cell)  -- select {input, output(t-1)}          -- cell gate {cell(t)}
+    model:add(concat)               -- {{input(t), output(t-1)}, cell(t)}, 
+--   end
 
    -- output of concat is {{input(t), output(t-1)}, cell(t)}, 
    -- so flatten to {input(t), output(t-1), cell(t)}
@@ -202,11 +210,11 @@ function ConvLSTM:buildModel()
    --- ============ partB of the model
    -------- output = 
    local cellAct = nn.Sequential() -- choose cell gate
-   if(self.inputFlag) then
-      cellAct:add(nn.SelectTable(3)) -- {intput gate}{}{cell gate}
-   else
-      cellAct:add(nn.SelectTable(2)) -- special case: input is {output(t-1), cell(t)}
-   end
+--   if(self.inputFlag) then
+   cellAct:add(nn.SelectTable(2)) -- {intput gate}{}{cell gate}
+--   else
+--      cellAct:add(nn.SelectTable(2)) -- special case: input is {output(t-1), cell(t)}
+--   end
    -- notice: previous cell activation cell(t-1) is self.cell
    -- currenct cell stats if nn.cell:
    cellAct:add(nn.Tanh()) -- tanh
@@ -226,12 +234,12 @@ function ConvLSTM:buildModel()
   
    local concat4 = nn.ConcatTable()
 
-   if(self.inputFlag) then
-       concat4:add(output):add(nn.SelectTable(3))
-   else
-       concat4:add(output):add(nn.SelectTable(2))  
+ --  if(self.inputFlag) then
+       concat4:add(output):add(nn.SelectTable(1))
+ --  else
+ --      concat4:add(output):add(nn.SelectTable(2))  
        -- special case: input is {output(t-1), cell(t)}
-   end    
+--   end    
 
    model:add(concat4)  
 
@@ -249,18 +257,17 @@ concat&multi:       |:select(3)              |
    return model
 end
 
-function ConvLSTM:updateOutput(input)
-
+function ConvLSTM_NoInput:updateOutput(input)
    local prevOutput, prevCell
    
    if self.step == 1 then
       prevOutput = self.userPrevOutput or self.zeroTensor
       prevCell = self.userPrevCell or self.zeroTensor
-      if self.batchSize then
-         self.zeroTensor:resize(self.batchSize, self.outputSize,input:size(3),input:size(4)):zero()
-      else
-         self.zeroTensor:resize(self.outputSize, input:size(2),input:size(3)):zero()
-      end
+--      if self.batchSize then
+--         self.zeroTensor:resize(self.batchSize, self.outputSize,input:size(3),input:size(4)):zero()
+--      else
+--         self.zeroTensor:resize(self.outputSize, input:size(2),input:size(3)):zero()
+--      end
    else
       -- previous output and memory of this module
       prevOutput = self.output
@@ -273,25 +280,23 @@ function ConvLSTM:updateOutput(input)
   -- prevOutput = torch.Tensor(8, 111, 50, 50)
 -- prevOutput:resize(8, 64, 50, 50)
    --input = torch.Tensor(8, 111, 50, 50)
-
+  
    local output, cell
    if self.train ~= false then
       self:recycle()
       local recurrentModule = self:getStepModule(self.step)
       -- print(recurrentModule)
       -- the actual forward propagation
-      if self.inputFlag then
-        output, cell = unpack(recurrentModule:updateOutput{input, prevOutput, prevCell})
-      else
-        output, cell = unpack(recurrentModule:updateOutput{prevOutput, prevCell})
-      end
+
+      output, cell = unpack(recurrentModule:updateOutput{input, prevOutput, prevCell})
    else
       output, cell = unpack(self.recurrentModule:updateOutput{input, prevOutput, prevCell})
    end
    
    self.outputs[self.step] = output
+
   -- print("i am here! ")
-   --print(self.outputs)
+  -- print(self.outputs)
    self.cells[self.step] = cell
    
    self.output = output
@@ -303,12 +308,10 @@ function ConvLSTM:updateOutput(input)
    self.accGradParametersStep = nil
    self.gradParametersAccumulated = false
    -- note that we don't return the cell, just the output
-
-
    return self.output
 end
 
-function ConvLSTM:initBias(forgetBias, otherBias)
+function ConvLSTM_NoInput:initBias(forgetBias, otherBias)
   local fBias = forgetBias or 1
   local oBias = otherBias or 0
   self.inputGate.modules[2].modules[1].bias:fill(oBias)
@@ -319,4 +322,91 @@ function ConvLSTM:initBias(forgetBias, otherBias)
   --self.cellGate.modules[2].modules[2].bias:fill(oBias)
   self.forgetGate.modules[2].modules[1].bias:fill(fBias)
   --self.forgetGate.modules[2].modules[2].bias:fill(fBias)
+end
+
+-------- ##########################
+--[[
+function ConvLSTM_NoInput:updateGradInput(input, gradOutput)  -- overload nn.recurrent
+   -- updateGradInput should be called in reverse order of time
+   self.updateGradInputStep = self.updateGradInputStep or self.step
+   
+   -- BPTT for one time-step
+   self.gradInput = self:_updateGradInput(input, gradOutput, self.updateGradInputStep)
+   
+   self.updateGradInputStep = self.updateGradInputStep - 1
+   return self.gradInput
+end
+]]--
+--[[
+function AbstractRecurrent:accGradParameters(input, gradOutput, scale)
+   -- accGradParameters should be called in reverse order of time
+   assert(self.updateGradInputStep < self.step, "Missing updateGradInput")
+   self.accGradParametersStep = self.accGradParametersStep or self.step
+   
+   -- BPTT for one time-step 
+   local step = self.accGradParametersStep - 1
+   self:_accGradParameters(input, gradOutput, scale)
+   
+   self.accGradParametersStep = self.accGradParametersStep - 1
+end
+]]--
+-------- ##########################
+
+function ConvLSTM_NoInput:_updateGradInput(input, gradOutput) -- overload nn.LSTM
+   assert(self.step > 1, "expecting at least one updateOutput")
+   local step = self.updateGradInputStep - 1
+   assert(step >= 1)
+   
+   -- set the output/gradOutput states of current Module
+   local recurrentModule = self:getStepModule(step)
+   
+   -- backward propagate through this step
+   if self.gradPrevOutput then
+      self._gradOutputs[step] = nn.rnn.recursiveCopy(self._gradOutputs[step], self.gradPrevOutput)
+      nn.rnn.recursiveAdd(self._gradOutputs[step], gradOutput)
+      gradOutput = self._gradOutputs[step]
+   end
+   
+   local output = (step == 1) and (self.userPrevOutput or self.zeroTensor) or self.outputs[step-1]
+   local cell = (step == 1) and (self.userPrevCell or self.zeroTensor) or self.cells[step-1]
+--   local inputTable = {input, output, cell}
+   local inputTable_OConly = {output, cell}
+   local gradCell = (step == self.step-1) and (self.userNextGradCell or self.zeroTensor) or self.gradCells[step]
+   
+   local gradInputTable = recurrentModule:updateGradInput(inputTable_OConly, {gradOutput, gradCell})
+   
+   local gradInput
+--   gradInput, self.gradPrevOutput, gradCell = unpack(gradInputTable)
+   self.gradPrevOutput, gradCell = unpack(gradInputTable)
+   gradInput = gradCell:clone()
+   gradInput:fill(0) -- no input infact
+
+   self.gradCells[step-1] = gradCell
+   if self.userPrevOutput then self.userGradPrevOutput = self.gradPrevOutput end
+   if self.userPrevCell then self.userGradPrevCell = gradCell end
+   
+   return gradInput
+end
+
+
+
+
+function ConvLSTM_NoInput:_accGradParameters(input, gradOutput, scale)
+   local step = self.accGradParametersStep - 1
+   assert(step >= 1)
+   
+   -- set the output/gradOutput states of current Module
+   local recurrentModule = self:getStepModule(step)
+   print("arrive _accGradParameters")
+   -- backward propagate through this step
+   local output = (step == 1) and (self.userPrevOutput or self.zeroTensor) or self.outputs[step-1]
+   local cell = (step == 1) and (self.userPrevCell or self.zeroTensor) or self.cells[step-1]
+   -- local inputTable = {output, cell}
+   local inputTable_OConly = {output, cell}
+   local gradOutput = (step == self.step-1) and gradOutput or self._gradOutputs[step]
+   local gradCell = (step == self.step-1) and (self.userNextGradCell or self.zeroTensor) or self.gradCells[step]
+   local gradOutputTable = {gradOutput, gradCell}
+   recurrentModule:accGradParameters(inputTable_OConly, gradOutputTable, scale)
+   
+   return gradInput
 end
